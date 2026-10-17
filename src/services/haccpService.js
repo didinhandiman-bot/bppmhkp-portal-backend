@@ -7,7 +7,7 @@ const clean = (v) => {
 };
 
 function normalizeFilters(raw = {}) {
-  const out = {};
+  const out = { _uptRestricted: raw._uptRestricted === true };
   if (raw.startDate) out.startDate = String(raw.startDate).slice(0, 10);
   if (raw.endDate) out.endDate = String(raw.endDate).slice(0, 10);
   if (out.startDate && out.endDate && out.startDate > out.endDate) {

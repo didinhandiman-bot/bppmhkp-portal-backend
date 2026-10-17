@@ -1,3 +1,4 @@
+import PrimerScopeService from '../services/primerScopeService.js';
 import { sendResponse } from '../utils/apiResponse.js';
 import PrimerService from '../services/primerService.js';
 
@@ -40,7 +41,8 @@ class PrimerController {
    */
   static async getOverview(req, res, next) {
     try {
-      const result = await PrimerService.getDashboardOverview(req.query);
+      const query = await PrimerScopeService.getQuery(req.user, req.query);
+      const result = await PrimerService.getDashboardOverview(query);
 
       return sendResponse(
         res,
@@ -60,7 +62,8 @@ class PrimerController {
    */
   static async getCertificates(req, res, next) {
     try {
-      const { data, meta } = await PrimerService.getCertificateList(req.query);
+      const query = await PrimerScopeService.getQuery(req.user, req.query);
+      const { data, meta } = await PrimerService.getCertificateList(query);
 
       return sendResponse(res, 200, 'Data sertifikat berhasil dimuat', data, { pagination: meta });
     } catch (error) {
@@ -79,7 +82,8 @@ class PrimerController {
    */
   static async exportCertificates(req, res, next) {
     try {
-      const { filename, columns, stream } = await PrimerService.exportCertificateData(req.query);
+      const query = await PrimerScopeService.getQuery(req.user, req.query);
+      const { filename, columns, stream } = await PrimerService.exportCertificateData(query);
 
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

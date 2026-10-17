@@ -1,6 +1,14 @@
+import { cityScopeCondition } from '../utils/primerCityScope.js';
+import DashboardAnalyticsRepository from './dashboardAnalyticsRepository.js';
+import { AppError } from '../errors/appError.js';
 import { QueryTypes } from 'sequelize';
 import { dbPrimer, dbKapal } from '../config/database.js';
 import models from '../models/index.js';
+import {
+  buildInClause,
+  expandUptCodeFilter,
+  sanitizeLabel,
+} from '../utils/uptCode.js';
 
 /**
  * Repository untuk data laporan perizinan primer (`report_primer`).
@@ -65,6 +73,42 @@ export const KODE_IZIN_PRIMER = Object.freeze([
 /** Nama tabel, dipakai berulang oleh seluruh kueri di file ini. */
 const TABEL = 'tr_laporan_primer_export';
 
+/**
+ * Bangun klausa WHERE untuk filter UPT pada data kapal (tb_cbib_kapal.kd_upt).
+ *
+ * `kd_upt` pada data kapal bisa memiliki alias yang sama dengan `tr_report_ekspor`
+ * (mis. `01.00`/`01.0` -> `15.0`), sehingga dipakai `expandUptCodeFilter` &
+ * `buildInClause` untuk ekspansi alias yang seragam.
+ *
+ * @param {object} filter - Objek filter yang mungkin berisi `uptId`, `kd_upt`, `kode_upt`, dll.
+ * @param {Record<string, unknown>} replacements - Objek replacements untuk query parameter.
+ * @returns {string} Fragmen klausa SQL (mis. `kd_upt IN (...)`), atau string kosong.
+ */
+function buildKapalUptWhere(filter, replacements) {
+  // Ambil kode UPT dari berbagai key yang mungkin dipakai frontend/controller
+  const rawCode = sanitizeLabel(
+    filter.uptId ??
+    filter.kd_upt ??
+    filter.kode_upt ??
+    filter.kdUnit ??
+    filter.kdUnit
+  );
+
+  if (!rawCode) {
+    return '';
+  }
+
+  // Ekspansi alias: 15.0 -> ['15.0', '01.0', '01.00']
+  const codes = expandUptCodeFilter(rawCode);
+  if (codes.length === 0) {
+    return '';
+  }
+
+  // Bangun klausa IN dengan placeholder terparameterisasi (tanpa 'AND' di depan)
+  const inClause = buildInClause(codes, 'kapalUpt', replacements);
+  return `kd_upt IN (${inClause})`;
+}
+
 class PrimerRepository {
   /**
    * Susun daftar `WHERE` beserta replacements-nya.
@@ -77,7 +121,7 @@ class PrimerRepository {
    * @param {object} r - objek replacements yang akan diisi
    * @returns {string} fragmen SQL untuk 'WHERE' (boleh kosong)
    */
-  static #buildWhere({ startDate, endDate, kdIzin, kdDaerah, search }, r) {
+  static #buildWhere({ startDate, endDate, kdIzin, kdDaerah, search, cityScope }, r) {
     const w = [];
 
     // Rentang tanggal. `tgl_izin` berupa DATE sehingga batas akhir cukup
@@ -102,6 +146,10 @@ class PrimerRepository {
       r.kdIzin = kdIzin;
     } else {
       w.push(`kd_izin IN (${this.#inClause(KODE_IZIN_PRIMER, 'izin', r)})`);
+    }
+
+    if (cityScope !== undefined) {
+      w.push(cityScopeCondition(cityScope, r));
     }
 
     if (kdDaerah) {
@@ -515,6 +563,9 @@ class PrimerRepository {
       where.push('tgl_terbit <= :endDate');
       r.endDate = `${filter.endDate} 23:59:59`;
     }
+    // Filter UPT: gunakan kode_upt yang sudah dipetakan ke KD_UNIT master
+    const uptWhere = buildKapalUptWhere(filter, r);
+    if (uptWhere) where.push(uptWhere);
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const rows = await dbKapal.query(
@@ -549,6 +600,8 @@ class PrimerRepository {
       where.push('tgl_terbit <= :endDate');
       r.endDate = `${filter.endDate} 23:59:59`;
     }
+    const uptWhere = buildKapalUptWhere(filter, r);
+    if (uptWhere) where.push(uptWhere);
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const rows = await dbKapal.query(
@@ -573,6 +626,8 @@ class PrimerRepository {
       where.push('tgl_terbit <= :endDate');
       r.endDate = `${filter.endDate} 23:59:59`;
     }
+    const uptWhere = buildKapalUptWhere(filter, r);
+    if (uptWhere) where.push(uptWhere);
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const rows = await dbKapal.query(
@@ -598,6 +653,8 @@ class PrimerRepository {
       where.push('tgl_terbit <= :endDate');
       r.endDate = `${filter.endDate} 23:59:59`;
     }
+    const uptWhere = buildKapalUptWhere(filter, r);
+    if (uptWhere) where.push(uptWhere);
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const rows = await dbKapal.query(
@@ -630,6 +687,8 @@ class PrimerRepository {
       where.push('tgl_terbit <= :endDate');
       r.endDate = `${filter.endDate} 23:59:59`;
     }
+    const uptWhere = buildKapalUptWhere(filter, r);
+    if (uptWhere) where.push(uptWhere);
     where.push("alat_tangkap IS NOT NULL");
     where.push("TRIM(alat_tangkap) <> ''");
     const whereClause = `WHERE ${where.join(' AND ')}`;
@@ -657,6 +716,8 @@ class PrimerRepository {
       where.push('tgl_terbit <= :endDate');
       r.endDate = `${filter.endDate} 23:59:59`;
     }
+    const uptWhere = buildKapalUptWhere(filter, r);
+    if (uptWhere) where.push(uptWhere);
     where.push("nama_pelabuhan IS NOT NULL");
     where.push("TRIM(nama_pelabuhan) <> ''");
     const whereClause = `WHERE ${where.join(' AND ')}`;
@@ -684,6 +745,8 @@ class PrimerRepository {
       where.push('tgl_terbit <= :endDate');
       r.endDate = `${filter.endDate} 23:59:59`;
     }
+    const uptWhere = buildKapalUptWhere(filter, r);
+    if (uptWhere) where.push(uptWhere);
     where.push("daerah_tangkap IS NOT NULL");
     where.push("TRIM(daerah_tangkap) <> ''");
     const whereClause = `WHERE ${where.join(' AND ')}`;
@@ -715,6 +778,8 @@ class PrimerRepository {
       where.push('(no_cbib LIKE :search OR nama_kapal LIKE :search OR nama_pemilik LIKE :search OR alat_tangkap LIKE :search OR nama_pelabuhan LIKE :search)');
       r.search = `%${String(filter.search).replace(/[\%_]/g, (c) => `\${c}`)}%`;
     }
+    const uptWhere = buildKapalUptWhere(filter, r);
+    if (uptWhere) where.push(uptWhere);
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const page = Number.isInteger(filter.page) && filter.page > 0 ? filter.page : 1;
@@ -731,7 +796,7 @@ class PrimerRepository {
       `SELECT
          id_cbib, no_cbib, nama_kapal, gt, tipe_kapal, tgl_permohonan, tgl_spt,
          tgl_awal_inspeksi, tgl_akhir_inspeksi, tgl_laporan, jenis_produk, grade_scpib,
-         tgl_terbit, tgl_kadaluarsa, upt_inspeksi, nama_pelabuhan, kode_provinsi,
+         tgl_terbit, tgl_kadaluarsa, upt_inspeksi, kd_upt, nama_pelabuhan, kode_provinsi,
          nama_provinsi, status_pemasok, nama_pemilik, jumlah_abk, alat_tangkap,
          daerah_tangkap, no_siup, no_kbli, pj_pusat
        FROM tb_cbib_kapal
@@ -749,16 +814,20 @@ class PrimerRepository {
     return { rows, count: Number(countRows[0]?.total ?? 0) };
   }
 
-  static async getAggregatedSummary({ startDate, endDate, uptId } = {}) {
+  static async getAggregatedSummary({ startDate, endDate, uptId, cityScope, isNationalAccess } = {}) {
+    if (uptId && !cityScope) throw new AppError('Scope kota wajib untuk filter UPT Primer', 403);
     const r = {};
     const w = [];
     if (startDate) {
-      w.push('tgl_izin BETWEEN :startDate AND :endDate');
+      w.push('tgl_izin >= :startDate');
       r.startDate = startDate;
-      r.endDate = endDate ? `${endDate} 23:59:59` : `${startDate} 23:59:59`;
-    } else if (endDate) {
+    }
+    if (endDate) {
       w.push('tgl_izin <= :endDate');
       r.endDate = `${endDate} 23:59:59`;
+    }
+    if (cityScope !== undefined) {
+      w.push(cityScopeCondition(cityScope, r));
     }
     const where = w.length ? `WHERE ${w.join(' AND ')}` : '';
     const rows = await dbPrimer.query(
@@ -775,19 +844,30 @@ class PrimerRepository {
       dbPrimer.query(`SELECT COUNT(*) AS c FROM ${TABEL} ${where ? where + ' AND kd_izin' : 'WHERE kd_izin'}='032000000019'`, { replacements: r, type: QueryTypes.SELECT }), // CPOIB
       dbPrimer.query(`SELECT COUNT(*) AS c FROM ${TABEL} ${where ? where + ' AND kd_izin' : 'WHERE kd_izin'}='032000000087'`, { replacements: r, type: QueryTypes.SELECT }), // CDOIB
       dbPrimer.query(`SELECT COUNT(*) AS c FROM ${TABEL} ${where ? where + ' AND kd_izin' : 'WHERE kd_izin'}='032000000036'`, { replacements: r, type: QueryTypes.SELECT })  // if needed? but we don't store
-    ]).catch(() => [[],[],[],[],[]]);
+    ]);
 
     // kapal
+    // Kapal disertakan untuk:
+    // - Tampilan nasional tanpa filter UPT (uptId kosong, cityScope kosong)
+    // - Tampilan nasional dengan filter UPT (isNationalAccess=true, uptId ada, cityScope dari UPT tsb)
+    // Kapal TIDAK disertakan untuk user non-nasional (isNationalAccess=false, uptId=UPT akun, cityScope dari UPT akun)
+    const includeKapal = (!cityScope && !uptId) || (isNationalAccess && uptId);
+
     let cpibKapalCount = 0;
-    try {
+    if (includeKapal) {
       const rw = {};
       const ww = [];
-      if (startDate) { ww.push('tgl_terbit BETWEEN :startDate AND :endDate'); rw.startDate=startDate; rw.endDate=endDate?`${endDate} 23:59:59`:`${startDate} 23:59:59`; }
-      else if (endDate) { ww.push('tgl_terbit <= :endDate'); rw.endDate=`${endDate} 23:59:59`; }
+      if (startDate) { ww.push('tgl_terbit >= :startDate'); rw.startDate=startDate; }
+      if (endDate) { ww.push('tgl_terbit <= :endDate'); rw.endDate=`${endDate} 23:59:59`; }
+      // Apply UPT filter for kapal if uptId provided
+      if (uptId) {
+        const uptWhere = buildKapalUptWhere({ uptId }, rw);
+        if (uptWhere) ww.push(uptWhere.trim());
+      }
       const wwk = ww.length?`WHERE ${ww.join(' AND ')}`:'';
       const rk = await dbKapal.query(`SELECT COUNT(*) AS c FROM tb_cbib_kapal ${wwk}`, { replacements: rw, type: QueryTypes.SELECT });
       cpibKapalCount = Number(rk[0]?.c ?? 0);
-    } catch (e) { cpibKapalCount = 0; }
+    }
 
     // Total sertifikat primer = baris `tr_laporan_primer_export` + sertifikat
     // CPIB Kapal dari `tb_cbib_kapal`. Keduanya berasal dari tabel berbeda
@@ -825,19 +905,12 @@ class PrimerRepository {
     };
   }
 
-  static async getMonthlyTrends({ startDate, endDate, uptId } = {}) {
-    const trends = Array(12).fill().map((_, i) => ({ month: i + 1, total: 0 }));
-    return trends;
+  static async readDashboard(mode, filters = {}) {
+    const sources = filters.cityScope || filters.uptId ? ['primer'] : ['primer','kapal'];
+    return (await Promise.all(sources.map(source => DashboardAnalyticsRepository.read(source, mode, filters)))).flat();
   }
-
-  static async getByUpt({ startDate, endDate, uptId } = {}) {
-    return [];
-  }
-
-  static async getRecentActivities({ startDate, endDate, uptId } = {}) {
-    return [];
-  }
-
+  static getDashboardMonthlyTrends(filters = {}) { return this.readDashboard('monthly', filters); }
+  static getByUpt(filters = {}) { return this.readDashboard('distribution', filters); }
+  static getRecentActivities(filters = {}) { return this.readDashboard('activities', filters); }
 }
-
 export default PrimerRepository;

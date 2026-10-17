@@ -7,6 +7,7 @@ import skpRoutes from './skpRoutes.js';
 import primerRoutes from './primerRoutes.js';
 import haccpRoutes from './haccpRoutes.js';
 import dashboardRoutes from './dashboardRoutes.js';
+import landingRoutes from './landingRoutes.js';
 
 /**
  * Agregator seluruh rute API versi 1.
@@ -29,5 +30,8 @@ router.use('/skp', skpRoutes);
 router.use('/primer', primerRoutes);
 router.use('/pasca-panen/haccp', haccpRoutes);
 router.use('/dashboard', dashboardRoutes);
+
+// Modul landing page publik (tanpa `verifyToken`), mis. peta sebaran.
+router.use('/landing', landingRoutes);
 
 export default router;

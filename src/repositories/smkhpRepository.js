@@ -140,6 +140,7 @@ class ExportRepository {
 
     const results = await db.query(sql, {
       replacements,
+      replacements,
       type: db.QueryTypes.SELECT,
       raw: true,
     });
@@ -175,6 +176,7 @@ class ExportRepository {
 
     const results = await db.query(sql, {
       replacements,
+      replacements,
       type: db.QueryTypes.SELECT,
       raw: true,
     });
@@ -189,16 +191,18 @@ class ExportRepository {
    * yang direkomendasikan kini berasal dari master `hc.tb_r_upt` melalui
    * `GET /api/v1/options/upt`, karena hanya master yang memuat kode unit.
    */
-  static async getUpts() {
+  static async getUpts(filters = {}) {
+    const { whereStr, replacements } = this.buildWhereClause(filters);
     const sql = `
       SELECT DISTINCT TRIM(REGEXP_REPLACE(nama_upt, '[[:space:]]+', ' ')) AS nama_upt
       FROM tr_report_ekspor
-      WHERE nama_upt IS NOT NULL
+      ${whereStr || 'WHERE 1 = 1'} AND nama_upt IS NOT NULL
         AND TRIM(REGEXP_REPLACE(nama_upt, '[[:space:]]+', ' ')) <> ''
       ORDER BY nama_upt ASC
     `;
 
     const results = await db.query(sql, {
+      replacements,
       type: db.QueryTypes.SELECT,
       raw: true,
     });
@@ -242,6 +246,7 @@ class ExportRepository {
     `;
 
     const results = await db.query(sql, {
+      replacements,
       replacements,
       type: db.QueryTypes.SELECT,
       raw: true,
@@ -287,6 +292,7 @@ class ExportRepository {
 
     const results = await db.query(sql, {
       replacements,
+      replacements,
       type: db.QueryTypes.SELECT,
       raw: true,
     });
@@ -313,6 +319,7 @@ class ExportRepository {
     `;
 
     const results = await db.query(sql, {
+      replacements,
       replacements,
       type: db.QueryTypes.SELECT,
       raw: true,
@@ -341,6 +348,7 @@ class ExportRepository {
     `;
 
     const results = await db.query(sql, {
+      replacements,
       replacements: { ...replacements, limit: parseInt(limit, 10) },
       type: db.QueryTypes.SELECT,
       raw: true,

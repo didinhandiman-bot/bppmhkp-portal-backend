@@ -1,3 +1,4 @@
+import { scopedUptQuery } from '../utils/uptScope.js';
 import SkpService from '../services/skpService.js';
 
 /**
@@ -16,7 +17,8 @@ class SkpController {
    */
   static async getSummary(req, res, next) {
     try {
-      const data = await SkpService.getSummaryMetrics(req.query);
+      const query = scopedUptQuery(req.user, req.query);
+      const data = await SkpService.getSummaryMetrics(query);
 
       return res.status(200).json({
         success: true,
@@ -35,7 +37,8 @@ class SkpController {
    */
   static async getTrends(req, res, next) {
     try {
-      const data = await SkpService.getMonthlyTrends(req.query);
+      const query = scopedUptQuery(req.user, req.query);
+      const data = await SkpService.getMonthlyTrends(query);
 
       return res.status(200).json({
         success: true,
@@ -54,7 +57,8 @@ class SkpController {
    */
   static async getDistribution(req, res, next) {
     try {
-      const data = await SkpService.getDistribution(req.query);
+      const query = scopedUptQuery(req.user, req.query);
+      const data = await SkpService.getDistribution(query);
 
       return res.status(200).json({
         success: true,
@@ -74,7 +78,8 @@ class SkpController {
    */
   static async getList(req, res, next) {
     try {
-      const result = await SkpService.getTableList(req.query);
+      const query = scopedUptQuery(req.user, req.query);
+      const result = await SkpService.getTableList(query);
 
       return res.status(200).json({
         success: true,

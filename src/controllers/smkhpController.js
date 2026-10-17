@@ -1,3 +1,4 @@
+import { scopedUptQuery } from '../utils/uptScope.js';
 import ExportService from '../services/smkhpService.js';
 import ExportMatrixService from '../services/smkhpMatrixService.js';
 import { sendResponse } from '../utils/apiResponse.js';
@@ -15,14 +16,15 @@ class ExportController {
    * - `negara_tujuan`: nama negara tujuan (opsional).
    */
   static #buildFilters(req) {
-    const kdUpt = req.query.kd_upt ?? req.query.kode_upt ?? req.query.upt_kode;
+    const query = scopedUptQuery(req.user, req.query);
+    const kdUpt = query.kd_upt ?? query.kode_upt ?? query.upt_kode;
 
     return {
-      startDate: req.query.startDate || undefined,
-      endDate: req.query.endDate || undefined,
+      startDate: query.startDate || undefined,
+      endDate: query.endDate || undefined,
       kd_upt: kdUpt || undefined,
-      upt: kdUpt ? undefined : req.query.upt || undefined,
-      negara_tujuan: req.query.negara_tujuan || undefined,
+      upt: kdUpt ? undefined : query.upt || undefined,
+      negara_tujuan: query.negara_tujuan || undefined,
     };
   }
 
@@ -57,7 +59,8 @@ class ExportController {
    */
   static async getTopDestinations(req, res, next) {
     try {
-      const limit = parseInt(req.query.limit, 10) || 5;
+      const query = scopedUptQuery(req.user, req.query);
+      const limit = parseInt(query.limit, 10) || 5;
 
       const data = await ExportService.getTopDestinations(
         ExportController.#buildFilters(req),
@@ -88,7 +91,7 @@ class ExportController {
    */
   static async getUpts(req, res, next) {
     try {
-      const data = await ExportService.getUpts();
+      const data = await ExportService.getUpts(ExportController.#buildFilters(req));
 
       return sendResponse(res, 200, 'Daftar UPT berhasil diambil.', data);
     } catch (error) {
@@ -119,10 +122,11 @@ class ExportController {
    * hanya menelusuri satu negara.
    */
   static #buildMatrixFilters(req) {
+    const query = scopedUptQuery(req.user, req.query);
     return {
       ...ExportController.#buildFilters(req),
-      tahun: req.query.tahun || undefined,
-      bulan: req.query.bulan || undefined,
+      tahun: query.tahun || undefined,
+      bulan: query.bulan || undefined,
     };
   }
 
@@ -131,9 +135,10 @@ class ExportController {
    */
   static async getTopProductsByDestination(req, res, next) {
     try {
+      const query = scopedUptQuery(req.user, req.query);
       const data = await ExportMatrixService.getMatrixTopProductsByDestination(
         ExportController.#buildMatrixFilters(req),
-        { productsLimit: parseInt(req.query.products, 10) || undefined }
+        { productsLimit: parseInt(query.products, 10) || undefined }
       );
 
       return sendResponse(res, 200, 'Matriks produk utama per negara tujuan berhasil diambil.', {
@@ -151,11 +156,12 @@ class ExportController {
    */
   static async getTopDestinationsByProduct(req, res, next) {
     try {
+      const query = scopedUptQuery(req.user, req.query);
       const data = await ExportMatrixService.getMatrixTopDestinationsByProduct(
         ExportController.#buildMatrixFilters(req),
         {
-          productsLimit: parseInt(req.query.products, 10) || undefined,
-          destinationsLimit: parseInt(req.query.destinations, 10) || undefined,
+          productsLimit: parseInt(query.products, 10) || undefined,
+          destinationsLimit: parseInt(query.destinations, 10) || undefined,
         }
       );
 
@@ -174,10 +180,11 @@ class ExportController {
    */
   static async getTransactions(req, res, next) {
     try {
+      const query = scopedUptQuery(req.user, req.query);
       const pagination = {
-        page: Math.max(1, parseInt(req.query.page, 10) || 1),
-        limit: Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10)),
-        search: req.query.search || '',
+        page: Math.max(1, parseInt(query.page, 10) || 1),
+        limit: Math.min(100, Math.max(1, parseInt(query.limit, 10) || 10)),
+        search: query.search || '',
       };
 
       const result = await ExportService.getTransactions(

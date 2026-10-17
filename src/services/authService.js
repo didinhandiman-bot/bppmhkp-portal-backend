@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import authRepository from '../repositories/authRepository.js';
 import { AppError } from '../errors/appError.js';
+import { JWT_SECRET } from '../config/auth.js';
 
 const ROLES_NASIONAL = [1, 6, 9];
 
@@ -49,9 +50,12 @@ class AuthService {
       throw new AppError(PESAN_ROLE_DITOLAK, 403);
     }
 
-    await authRepository.updateLoginSession(user.USER_ID, ipAddress);
+    const isNational = ROLES_NASIONAL.includes(roleId);
+    if (!isNational && (user.KD_UNIT == null || !String(user.KD_UNIT).trim())) {
+      throw new AppError('Akun belum memiliki kode UPT yang valid', 403);
+    }
 
-    const isNational = ROLES_NASIONAL.includes(roleId) || !user.KD_UNIT;
+    await authRepository.updateLoginSession(user.USER_ID, ipAddress);
 
     const payload = {
       userId: user.USER_ID,
@@ -62,11 +66,11 @@ class AuthService {
       // membaca `role_id` (konvensi tabel) tidak perlu mengubah.
       role_id: roleId,
       roleName: user.ROLE_NAME,
-      kdUnit: isNational ? null : user.KD_UNIT,
+      kdUnit: isNational ? null : String(user.KD_UNIT).trim(),
       isNationalAccess: isNational,
     };
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET || 'bppmhkp_secret_key_executive_2026', {
+    const token = jwt.sign(payload, JWT_SECRET, {
       expiresIn: process.env.JWT_EXPIRES_IN || '8h',
     });
 

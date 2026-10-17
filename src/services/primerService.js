@@ -1,4 +1,5 @@
 import PrimerRepository from '../repositories/primerRepository.js';
+import UptMasterService from '../services/uptMasterService.js';
 
 /**
  * Service modul Primer (laporan perizinan primer).
@@ -117,6 +118,7 @@ class PrimerService {
    */
   static #normalizeFilters(raw = {}) {
     const out = {};
+    if (raw.cityScope !== undefined) out.cityScope = raw.cityScope;
 
     if (raw.startDate) out.startDate = String(raw.startDate).slice(0, 10);
     if (raw.endDate) out.endDate = String(raw.endDate).slice(0, 10);
@@ -131,6 +133,8 @@ class PrimerService {
 
     if (raw.kdIzin) out.kdIzin = String(raw.kdIzin).trim();
     if (raw.kdDaerah) out.kdDaerah = String(raw.kdDaerah).trim();
+    // uptId dibutuhkan untuk filter kapal (tb_cbib_kapal.kd_upt) via buildKapalUptWhere.
+    if (raw.uptId) out.uptId = String(raw.uptId).trim();
 
     if (raw.search) {
       const s = String(raw.search).trim().slice(0, 100);
@@ -285,7 +289,12 @@ class PrimerService {
         sortBy: query.sortBy,
         sortOrder: query.sortOrder
       });
-      const data = rows.map((row) => this.#mapKapalRow(row));
+
+      // Relasikan kode_upt kapal dengan master UPT (tb_r_upt.KD_UNIT)
+      // Normalisasi kode UPT dan kaya dengan nama UPT dari master
+      const enrichedRows = await UptMasterService.applyToRows(rows);
+
+      const data = enrichedRows.map((row) => this.#mapKapalRow(row));
       const totalPages = count > 0 ? Math.ceil(count / limit) : 0;
       return {
         data,
@@ -368,7 +377,7 @@ class PrimerService {
       pemilik: clean(row.nama_pemilik),
       gt: num(row.gt),
       alatTangkap: clean(row.alat_tangkap),
-      upt: clean(row.upt_inspeksi),
+      upt: clean(row.nama_upt ?? row.upt_inspeksi),
       tglTerbit: row.tgl_terbit,
       tglKadaluarsa: row.tgl_kadaluarsa,
       masaBerlaku: row.tgl_kadaluarsa,

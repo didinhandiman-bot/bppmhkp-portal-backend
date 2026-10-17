@@ -1,3 +1,5 @@
+import { normalizeUptCode } from '../utils/uptCode.js';
+import { scopedUptQuery } from '../utils/uptScope.js';
 import UptMasterService from '../services/uptMasterService.js';
 import { sendResponse } from '../utils/apiResponse.js';
 
@@ -23,7 +25,9 @@ class OptionsController {
    */
   static async getUptOptions(req, res, next) {
     try {
-      const options = await UptMasterService.getOptions();
+      const scope = scopedUptQuery(req.user, req.query);
+      const allOptions = await UptMasterService.getOptions();
+      const options = req.user.isNationalAccess === true ? allOptions : allOptions.filter((option) => normalizeUptCode(option.value) === normalizeUptCode(scope.kd_upt));
 
       // `UptMasterService.load()` sengaja tidak melempar error saat gagal
       // membaca DB: ia mengembalikan cache kosong berumur pendek. Tanpa

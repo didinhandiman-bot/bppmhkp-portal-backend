@@ -3,7 +3,7 @@ import { dbHaccp } from '../config/database.js';
 
 const VIEW = 'report_haccp.vw07_sertifikasi';
 
-function buildWhere({ startDate, endDate, idUpt, upt, kdUnit, grade, statusSert }, replacements) {
+function buildWhere({ startDate, endDate, idUpt, upt, kdUnit, grade, statusSert, _uptRestricted }, replacements) {
   const w = [];
   if (startDate) {
     w.push('tgl_terbit BETWEEN :startDate AND :endDate');
@@ -15,7 +15,7 @@ function buildWhere({ startDate, endDate, idUpt, upt, kdUnit, grade, statusSert 
   }
   const uptVal = upt || kdUnit || idUpt;
   if (uptVal) {
-    w.push("(kd_unit = :upt OR id_upt = :upt)");
+    w.push(_uptRestricted ? "kd_unit = :upt" : "(kd_unit = :upt OR id_upt = :upt)");
     replacements.upt = uptVal;
   }
   if (grade) {
@@ -146,10 +146,10 @@ class HaccpRepository {
     const r = {};
     const where = buildWhere(filters, r);
     const rows = await dbHaccp.query(
-      `SELECT COALESCE(NULLIF(TRIM(investment), ''), 'Tidak Ada') AS investment, COUNT(*) AS total
+      `SELECT COALESCE(NULLIF(TRIM(skala), ''), 'Tidak Ada') AS investment, COUNT(*) AS total
        FROM ${VIEW}
        ${where}
-       GROUP BY investment
+       GROUP BY 1
        ORDER BY total DESC`,
       { replacements: r, type: QueryTypes.SELECT }
     );
@@ -160,35 +160,12 @@ class HaccpRepository {
     const r = {};
     const where = buildWhere(filters, r);
 
+    let where2 = where;
     if (filters.search) {
-      wpush(where, '(upi_name LIKE :search OR nama_produk LIKE :search OR nama_kategori LIKE :search OR no_haccp LIKE :search OR upt LIKE :search)');
+      const searchCondition = '(upi_name LIKE :search OR nama_produk LIKE :search OR nama_kategori LIKE :search OR no_haccp LIKE :search OR upt LIKE :search)';
+      where2 += `${where2 ? ' AND ' : 'WHERE '}${searchCondition}`;
       r.search = `%${String(filters.search).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     }
-    function wpush(arr, cond) {
-      // small helper
-      if (arr.length >= 0) {
-        // rebuild by injecting? simpler: handle search separately
-      }
-    }
-    // rebuild where with search properly
-    const w2 = [];
-    if (filters.startDate) {
-      w2.push('tgl_terbit BETWEEN :startDate AND :endDate');
-      r.startDate = filters.startDate;
-      r.endDate = filters.endDate ? `${filters.endDate} 23:59:59` : `${filters.startDate} 23:59:59`;
-    } else if (filters.endDate) {
-      w2.push('tgl_terbit <= :endDate');
-      r.endDate = `${filters.endDate} 23:59:59`;
-    }
-    const uptVal = filters.upt || filters.kdUnit || filters.idUpt || filters.id_upt || filters.kd_unit;
-    if (uptVal) { w2.push("(kd_unit = :upt OR id_upt = :upt)"); r.upt = uptVal; }
-    if (filters.grade) { w2.push('grade = :grade'); r.grade = filters.grade; }
-    if (filters.statusSert) { w2.push('status_sert = :statusSert'); r.statusSert = filters.statusSert; }
-    if (filters.search) {
-      w2.push('(upi_name LIKE :search OR nama_produk LIKE :search OR nama_kategori LIKE :search OR no_haccp LIKE :search OR upt LIKE :search)');
-      r.search = `%${String(filters.search).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-    }
-    const where2 = w2.length ? `WHERE ${w2.join(' AND ')}` : '';
 
     const page = Math.max(1, Number(pagination.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(pagination.limit) || 10));

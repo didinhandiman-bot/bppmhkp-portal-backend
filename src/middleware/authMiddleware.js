@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { JWT_SECRET } from '../config/auth.js';
 
 export const verifyToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -9,7 +10,7 @@ export const verifyToken = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'bppmhkp_secret_key_executive_2026');
+    const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
     next();
   } catch (err) {

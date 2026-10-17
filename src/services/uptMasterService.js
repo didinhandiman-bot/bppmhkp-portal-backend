@@ -322,6 +322,38 @@ class UptMasterService {
   }
 
   /**
+   * Menyusun daftar titik UPT untuk peta sebaran.
+   *
+   * Dipakai endpoint PUBLIK `/api/v1/landing/upt-marker`, jadi sengaja
+   * memakai cache master yang sama (`getEntries`) dan bukan pembacaan baru —
+   * tidak ada cache kedua.
+   *
+   * Hanya unit dengan koordinat valid yang dikembalikan; baris tanpa
+   * koordinat dilewati agar tidak muncul marker di luar Indonesia.
+   *
+   * `nama` adalah label pendek resmi; `nmUnit` nama panjangnya, dan `alamat`
+   * sudah dirapikan dari CR/LF. Semuanya sudah tersaring `STS_AKTIF = 1` dan
+   * bebas unit dummy lewat `getEntries()`.
+   *
+   * @returns {Promise<Array<{kodeUpt: string, nama: string, nmUnit: string, kota: string, alamat: string, latitude: number, longitude: number}>>}
+   */
+  static async getMapMarkers() {
+    const entries = await UptMasterService.getEntries();
+
+    return entries
+      .filter((entry) => entry.latitude !== null && entry.longitude !== null)
+      .map((entry) => ({
+        kodeUpt: entry.kdUnit,
+        nama: entry.label,
+        nmUnit: entry.nmUnit,
+        kota: entry.kota,
+        alamat: entry.alamat,
+        latitude: entry.latitude,
+        longitude: entry.longitude,
+      }));
+  }
+
+  /**
    * Mengosongkan cache agar perubahan master terbaca tanpa restart.
    *
    * @param {boolean} forceReload Muat ulang seketika bila `true`.

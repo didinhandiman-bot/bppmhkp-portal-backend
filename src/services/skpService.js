@@ -51,6 +51,7 @@ class SkpService {
 
     const filter = {
       year: safeYear,
+      kdUnit: query.kd_unit || query.kdUnit || query.kd_upt || query.uptId || null,
       provinsiId: query.provinsiId ? String(query.provinsiId).trim() : null,
       skalaUsaha: null,
       peringkat: null,

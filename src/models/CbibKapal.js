@@ -67,6 +67,10 @@ export default function init(sequelize) {
         type: DataTypes.STRING(150),
         allowNull: true,
       },
+      kd_upt: {
+            type: DataTypes.STRING(10),
+            allowNull: true
+      },
       nama_pelabuhan: {
         type: DataTypes.STRING(150),
         allowNull: true,

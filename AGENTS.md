@@ -1,10 +1,9 @@
 # AGENTS.md
 
 Express 5 + Sequelize 6 API (ESM, `"type": "module"`) behind the BPPMHKP fish-export
-dashboard. Reads five MySQL schemas and serves analytics + JWT auth.
+dashboard. Reads seven MySQL schemas and serves analytics + JWT auth.
 
-No git repo, no linter, no test runner, no CI, no README. `package.json` has only
-`start` and `dev`.
+No git repo, no linter, no test runner, no CI, no README. `package.json` includes `start`, `dev` and three regression-test scripts.
 
 ## Architecture: technical layering in root `src/`
 
@@ -59,7 +58,9 @@ npm start          # node server.js  (port from .env: 5002)
 npm run dev        # nodemon server.js, no nodemon config
 ```
 
-There is no lint / typecheck / test command to run. The only verification available is
+Tests: `npm run test:security`, `npm run test:dashboard`, and `npm run test:sequelize`
+(Node 24, no .env reads or database access). There is no lint/typecheck command.
+Additional verification is
 an import smoke test, which is also how you find broken wiring:
 
 ```bash
@@ -103,7 +104,7 @@ router. `npm run dev` (nodemon) avoids this.
 
 ## Database connections
 
-`src/config/database.js` creates five independent Sequelize instances:
+`src/config/database.js` creates seven independent Sequelize instances:
 
 | Export | Schema | Contents |
 |---|---|---|
@@ -112,6 +113,8 @@ router. `npm run dev` (nodemon) avoids this.
 | `dbReportSkp` | `report_skp` | `tr_skp_paska` |
 | `dbPrimer` | `report_primer` | `tr_laporan_primer_export` |
 | `dbMutu` | `mutu` | data master perizinan |
+| `dbKapal` | `report_kapal` | `tb_cbib_kapal` |
+| `dbHaccp` | `report_haccp` | `vw07_sertifikasi` |
 
 All point at the same host today but are treated as separate servers. **Never write a
 cross-database JOIN.** `hc.tb_r_upt` is read into an in-memory `Map`, then merged with
@@ -226,14 +229,16 @@ invalid/expired.
 - Login itself rejects any role outside `ROLES_IZIN = [1, 2]` with **403**, before
   `updateLoginSession` runs. `skp` and `primer` additionally mount `allowRoles([1, 2])` as
   defense in depth for tokens minted before that rule.
-- Roles `1, 6, 9` (or a user with no `KD_UNIT`) get `isNationalAccess: true` and
-  `kdUnit: null` in the JWT payload. Per-UPT scoping is enforced downstream from these
-  claims.
+- Roles `1, 6, 9` get `isNationalAccess: true`. Login still admits only roles 1 and 2.
+  Non-national users without `KD_UNIT` are rejected; missing UPT never grants national access.
+  Controllers enforce scope through `utils/uptScope.js`. Primer province access uses
+  `PrimerScopeService`: exact KD_UNIT -> tb_kota.KODE_UPT -> KODE_KOTA,
+  filtered against the first four digits of kd_daerah.
+  Scoped Primer/dashboard exclude kapal until upt_inspeksi has a trusted mapping.
 - The JWT carries both `roleId` and `role_id`; `allowRoles` reads `roleId` first and
   falls back. Keep both keys in sync when the payload changes.
-- `JWT_SECRET` has a **hardcoded fallback** duplicated in `services/authService.js` and
-  `middleware/authMiddleware.js` (`bppmhkp_secret_key_executive_2026`), matching `.env`.
-  Keep the two in sync or remove the fallbacks — don't let them drift.
+- `config/auth.js` loads and validates `JWT_SECRET` at module initialization.
+  Login and token verification share that value; there is no default secret.
 - `.env` holds live shared MySQL credentials. Don't echo it, log it, or paste it into
   output.
 
@@ -262,6 +267,9 @@ Prefixes are declared once in `src/routes/index.js`, all under the single
   `top-destinations-by-product`, `transactions`
 - `/api/v1/skp` — `summary`, `trends`, `distribution`, `list`
 - `/api/v1/primer` — `overview`, `certificates`, `export`
+
+- `/api/v1/pasca-panen/haccp` ? `kpi`, `charts`, `table`, all protected by JWT.
+  `/api/pasca-panen/haccp` remains a protected compatibility alias.
 
 `GET /api/health` is mounted directly in `app.js`, outside `/api/v1` and unauthenticated.
 
@@ -297,3 +305,12 @@ Silently calling `res.end()` hides the bug as a zero-byte download.
 - `smkhp` keeps its reference-project variable names (`ExportService`,
   `ExportRepository`, `ExportController`) even though the files are `smkhp*`. Renaming
   them touches four layers for no gain; leave them.
+
+## Dashboard overview
+
+`dashboardAnalyticsRepository.js` supplies SQL-backed monthly/distribution/activity queries
+for five sources using shared date/UPT/city predicates. Months use YYYY-MM so years
+never collapse into one month. Primer city buckets are mapped through hc.tb_kota to
+active UPTs; unmapped cities are explicitly labeled in national results. Kapal stays excluded from scoped results. SMKHP appears in two KPI pillars
+but is deduplicated in the recent-activity feed. Query errors propagate rather than
+silently becoming zero metrics.

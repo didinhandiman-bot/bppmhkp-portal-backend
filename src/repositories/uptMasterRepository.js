@@ -21,13 +21,87 @@ if (!TbRUpt || !dbMaster) {
  */
 const SELECTED_COLUMNS = [
   'KD_UNIT',
+  'KD_PROP',
   'NM_PENDEK_BARU',
   'NM_UNIT_BARU',
   'NM_PENDEK',
   'NM_UNIT',
   'KOTA',
+  'ALAMAT_UNIT',
+  'BUJUR',
+  'LINTANG',
   'STS_AKTIF',
 ];
+
+/**
+ * Mengubah nilai kolom koordinat master UPT menjadi angka.
+ *
+ * Nilai di `BUJUR`/`LINTANG` bertipe VARCHAR dan membawa CR/LF ikutan, jadi
+ * harus dibersihkan lebih dulu. Nilai non-numerik dikembalikan `null` supaya
+ * baris tanpa koordinat tidak muncul sebagai titik `(0, 0)` di Samudra Atlantik.
+ *
+ * @param {unknown} value Nilai kolom mentah.
+ * @returns {number|null} Koordinat sebagai angka, atau `null` bila tidak valid.
+ */
+function toCoordinate(value) {
+  const raw = sanitizeLabel(value);
+  if (raw === '') {
+    return null;
+  }
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : null;
+}
+
+/**
+ * Rentang koordinat yang wajar untuk wilayah Indonesia.
+ *
+ * Dipakai untuk mendeteksi baris master yang pasangan koordinatnya terbalik:
+ * sebagian baris menyimpan longitude di `BUJUR` dan latitude di `LINTANG`,
+ * berlawanan dengan konvensi umum tabel ini.
+ */
+const INDONESIA_LAT_RANGE = [-11.5, 6.5];
+const INDONESIA_LNG_RANGE = [94, 142];
+
+/** Apakah pasangan (lat, lng) berada di dalam rentang wajar Indonesia. */
+function isWithinIndonesia(lat, lng) {
+  return (
+    lat >= INDONESIA_LAT_RANGE[0] &&
+    lat <= INDONESIA_LAT_RANGE[1] &&
+    lng >= INDONESIA_LNG_RANGE[0] &&
+    lng <= INDONESIA_LNG_RANGE[1]
+  );
+}
+
+/**
+ * Menentukan (latitude, longitude) akhir dari kolom `BUJUR`/`LINTANG`.
+ *
+ * Konvensi tabel: `BUJUR` = LATITUDE, `LINTANG` = LONGITUDE (lihat catatan
+ * quirk di `normalizeRow`). Akan tetapi ditemukan minimal satu baris master
+ * (KD_UNIT `25.0`, Balai PPMHKP Tanjung Pinang) yang menyimpannya TERBALIK,
+ * sehingga tafsir lurus menghasilkan `lat = 104.44`. Bila tafsir pertama jatuh
+ * di luar rentang wajar Indonesia dan tafsir terbalik masuk akal, pakai yang
+ * terbalik. Bila keduanya di luar rentang, kembalikan `null` supaya tidak ada
+ * marker nyasar (lebih baik titik hilang daripada titik di lokasi salah).
+ *
+ * @param {unknown} bujurValue Nilai kolom `BUJUR`.
+ * @param {unknown} lintangValue Nilai kolom `LINTANG`.
+ * @returns {{ latitude: number|null, longitude: number|null }}
+ */
+function resolveCoordinates(bujurValue, lintangValue) {
+  const lat = toCoordinate(bujurValue);
+  const lng = toCoordinate(lintangValue);
+
+  if (lat === null || lng === null) {
+    return { latitude: null, longitude: null };
+  }
+  if (isWithinIndonesia(lat, lng)) {
+    return { latitude: lat, longitude: lng };
+  }
+  if (isWithinIndonesia(lng, lat)) {
+    return { latitude: lng, longitude: lat };
+  }
+  return { latitude: null, longitude: null };
+}
 
 /** Attribute Sequelize yang dipakai pada klausa filter. */
 const ACTIVE_ATTRIBUTE = 'STS_AKTIF';
@@ -77,7 +151,7 @@ class UptMasterRepository {
    * dibuang.
    *
    * @param {object} row Baris mentah `tb_r_upt`.
-   * @returns {{ kdUnit: string, label: string, kota: string, raw: object }|null}
+   * @returns {{ kdUnit: string, label: string, kota: string, nmUnit: string, alamat: string, latitude: number|null, longitude: number|null, raw: object }|null}
    */
   static normalizeRow(row) {
     const kdUnit = sanitizeLabel(row?.[CODE_ATTRIBUTE]);
@@ -96,6 +170,22 @@ class UptMasterRepository {
       kdUnit,
       label,
       kota: sanitizeLabel(row?.KOTA),
+      // `NM_UNIT` (nama panjang, mis. "Balai Karantina Ikan, ... Makassar")
+      // disimpan terpisah dari `label` supaya popup peta bisa menampilkan nama
+      // panjang sebagai alternatif. Sudah lewat `sanitizeLabel`, jadi CR/LF
+      // bawaan tabel ini tidak ikut terbawa.
+      nmUnit: sanitizeLabel(row?.NM_UNIT),
+      // `ALAMAT_UNIT` juga mengandung CR/LF; `sanitizeLabel` merapikannya jadi
+      // spasi tunggal agar aman ditampilkan di popup.
+      alamat: sanitizeLabel(row?.ALAMAT_UNIT),
+      // QUIRK kolom basis data: namanya TERTUKAR. `BUJUR` (harfiah
+      // "longitude") justru menyimpan LATITUDE (mis. -5.06 untuk Makassar),
+      // sedangkan `LINTANG` (harfiah "latitude") menyimpan LONGITUDE
+      // (mis. 119.52). Pemetaan ke nama yang benar dilakukan di sini supaya
+      // lapisan atas (service/controller/frontend) tidak perlu tahu
+      // kekeliruan ini. `resolveCoordinates` sekaligus menangani baris yang
+      // pasangannya benar-benar terbalik (mis. KD_UNIT 25.0).
+      ...resolveCoordinates(row?.BUJUR, row?.LINTANG),
       raw: row,
     };
   }

@@ -77,6 +77,11 @@ class SkpRepository {
     ];
     const replacements = { rangeStart: range.start, rangeEnd: range.endNext };
 
+    if (filter.kdUnit) {
+      conditions.push(`${alias}kd_unit = :kdUnit`);
+      replacements.kdUnit = filter.kdUnit;
+    }
+
     if (filter.provinsiId) {
       conditions.push(`${alias}provinsi_id = :provinsiId`);
       replacements.provinsiId = filter.provinsiId;

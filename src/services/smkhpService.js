@@ -158,8 +158,8 @@ class ExportService {
    * `UptMasterService.getOptions()` karena hanya master `hc.tb_r_upt` yang
    * memuat kode unit.
    */
-  static async getUpts() {
-    const rows = await ExportRepository.getUpts();
+  static async getUpts(filters = {}) {
+    const rows = await ExportRepository.getUpts(filters);
 
     return rows.map((row) => ({ nama_upt: row.nama_upt }));
   }

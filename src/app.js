@@ -27,6 +27,8 @@ app.get('/api/health', (req, res) => {
 // Seluruh rute API versi 1 dikumpulkan di satu router, termasuk modul Primer.
 // Hanya prefix `/api/v1` yang perlu terdaftar di sini.
 app.use('/api/v1', v1Routes);
+// Alias kompatibilitas frontend lama; router yang sama tetap memverifikasi JWT.
+// Prefix utama: /api/v1/pasca-panen/haccp melalui routes/index.js.
 app.use('/api/pasca-panen/haccp', haccpRoutes);
 
 // Global Error Handler diletakkan paling akhir
