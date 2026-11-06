@@ -5,5 +5,7 @@ import { verifyToken } from '../middleware/authMiddleware.js';
 const router = Router();
 
 router.get('/overview', verifyToken, DashboardOverviewController.getOverview);
+// Route publik khusus konsumsi Landing Page / Mutiara Backend (tanpa verifyToken)
+// router.get('/public-overview', DashboardOverviewController.getOverview);
 
 export default router;

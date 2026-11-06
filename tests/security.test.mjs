@@ -7,13 +7,16 @@ import jwt from 'jsonwebtoken';
 globalThis.securityQueries = [];
 registerHooks({ load(url, context, nextLoad) {
   if (url.includes('/node_modules/dotenv/')) return { format: 'module', shortCircuit: true, source: 'export default { config() {} };' };
+  // Lapisan data kini berjalan lewat Model Sequelize (Model-First Standard),
+  // jadi mock DB-nya adalah instance Sequelize NYATA tanpa koneksi: `define`
+  // dan generator SQL Sequelize tetap bekerja sungguhan, hanya `query` yang
+  // dialihkan ke fungsi tangkap di atas. Mock `src/models/index.js` dihapus
+  // agar definisi model produksi yang dimuat — itulah yang sedang diuji.
   if (url.endsWith('/src/config/database.js')) return { format: 'module', shortCircuit: true, source: `
-    const db = { QueryTypes: { SELECT: 'SELECT' }, query: async (sql, options) => { globalThis.securityQueries.push({sql, options}); if(sql.includes('hc.tb_kota')) return [{KODE_KOTA:'3101',KODE_UPT:'15.0'},{KODE_KOTA:'3102',KODE_UPT:'47.0'}]; return []; } };
-    export const dbMaster=db, dbReport=db, dbReportSkp=db, dbPrimer=db, dbKapal=db, dbHaccp=db, dbMutu=db;
-  ` };
-  if (url.endsWith('/src/models/index.js')) return { format: 'module', shortCircuit: true, source: `
-    import { dbMaster, dbReport } from '../config/database.js';
-    export { dbMaster }; export default { dbMaster, TbRUpt: {}, sequelize: dbReport, sequelizeReport: dbReport };
+    import { Sequelize } from 'sequelize';
+    const capture = async (sql, options) => { globalThis.securityQueries.push({sql, options}); if(sql.includes('hc.tb_kota')) return [{KODE_KOTA:'3101',KODE_UPT:'15.0'},{KODE_KOTA:'3102',KODE_UPT:'47.0'}]; return []; };
+    const make = () => { const s = new Sequelize({ dialect: 'mysql', logging: false }); s.query = capture; return s; };
+    export const dbMaster=make(), dbReport=make(), dbReportSkp=make(), dbPrimer=make(), dbKapal=make(), dbHaccp=make(), dbMutu=make();
   ` };
   return nextLoad(url, context);
 }});

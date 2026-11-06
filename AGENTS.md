@@ -14,17 +14,17 @@ Every component lives in a **layer folder** under `src/`, not inside a per-featu
 src/
 ├── controllers/     5 files   *Controller.js   HTTP in, envelope out
 ├── services/        7 files   *Service.js      business logic, validation, shaping
-├── repositories/    6 files   *Repository.js   raw SQL + parameterised replacements
+├── repositories/    6 files   *Repository.js   Model-based queries (Sequelize Model methods)
 ├── routes/          6 files   *Routes.js + index.js (the /api/v1 aggregator)
 ├── middleware/      3 files   verifyToken, allowRoles, errorHandler
 ├── config/          database.js — every Sequelize instance lives here
-├── models/          Sequelize models + index.js
+├── models/          Sequelize models + index.js (all tables/views defined here)
 ├── utils/           pure functions, no dependencies
 └── errors/          AppError
 ```
 
 Dependencies flow one way and never skip a layer:
-`routes → controllers → services → repositories → config | models | utils`.
+`routes → controllers → services → repositories → models → config/database`.
 
 `src/routes/index.js` is the only aggregator; `src/app.js` mounts it once at
 `/api/v1` and nothing else. There is no `src/modules/` and no `src/common/` — if you
@@ -35,21 +35,44 @@ sibling with `./` and any cross-layer file with `../<layer>/`. There is no `../.
 depth anywhere in `src/`; if you write one, you are importing into a layer that does
 not exist.
 
+### Architectural Rules for Repositories and Models (Model-First Standard)
+
+1. **Strict Model Layering**:
+   - Repository **WAJIB** berinteraksi dengan data melalui Sequelize Models yang terdaftar dan diekspor dari `src/models/index.js`.
+   - **Dilarang keras membypass Model**: Jangan melakukan query string mentah langsung pada koneksi DB (`db.query`) atau mendefinisikan kamus nama tabel string manual di dalam Repository.
+   - Semua entitas database/skema (ekspor, skp, haccp, primer, kapal, master) **WAJIB** memiliki definisi model Sequelize di `src/models/`.
+
+2. **Model Definition Requirements**:
+   - Setiap model harus diikat (*bound*) ke instance koneksi Sequelize yang sesuai dari `src/config/database.js` (`dbMaster`, `dbReport`, `dbReportSkp`, `dbHaccp`, `dbPrimer`, `dbKapal`, `dbMutu`).
+   - Karena tabel dan view legacy tidak dikelola via migrasi Sequelize, semua model wajib mengonfigurasi opsi:
+     ```javascript
+     {
+       timestamps: false,
+       freezeTableName: true
+     }
+     ```
+   - Untuk tabel atau view yang tidak memiliki kolom `id` standar (misal view SQL `vw07_sertifikasi` atau tabel audit), tentukan `primaryKey: true` secara eksplisit pada atribut identifier unik dokumen/registrasi agar Sequelize dapat menjalankan agregasi dan query tanpa error.
+
+3. **Handling Aggregations & Calculations**:
+   - Query agregasi analitik (COUNT, SUM, GROUP BY, derived expression) wajib memanfaatkan method Sequelize Model (misalnya `Model.findAll`, `Model.count`) dikombinasikan dengan `sequelize.literal()` atau `sequelize.fn()`.
+   - Derived column (seperti kalkulasi kurs USD `nilai_rupiah / kurs_usd` atau `DATE_FORMAT`) ditempatkan dalam array `attributes` Model menggunakan `sequelize.literal()`.
+   - Semua input dinamis dalam `sequelize.literal()` atau klausa `where` wajib menggunakan `replacements` / parameter binding untuk mencegah SQL injection.
+
 ### Adding a feature
 
-Create the four files in the existing layer folders — do **not** create a new
-subdirectory:
+Create the files in the existing layer folders — do **not** create a new subdirectory:
 
 ```
+src/models/<Name>.js              # Register in src/models/index.js
 src/repositories/<name>Repository.js
 src/services/<name>Service.js
 src/controllers/<name>Controller.js
 src/routes/<name>Routes.js
 ```
 
-Then register the router in `src/routes/index.js`. Keep the layer discipline: no SQL
+Then register the router in `src/routes/index.js`. Keep the layer discipline: no SQL/queries
 in controller or service, no `req`/`res` outside controllers, no business constants in
-repository SQL.
+repository layer.
 
 ## Commands
 
@@ -60,8 +83,7 @@ npm run dev        # nodemon server.js, no nodemon config
 
 Tests: `npm run test:security`, `npm run test:dashboard`, and `npm run test:sequelize`
 (Node 24, no .env reads or database access). There is no lint/typecheck command.
-Additional verification is
-an import smoke test, which is also how you find broken wiring:
+Additional verification is an import smoke test, which is also how you find broken wiring:
 
 ```bash
 node --input-type=module -e "import('./src/app.js').then(()=>console.log('OK')).catch(e=>console.log(e.message))"
@@ -110,7 +132,7 @@ router. `npm run dev` (nodemon) avoids this.
 |---|---|---|
 | `dbMaster` | `hc` | `tb_user`, `tb_r_upt` |
 | `dbReport` | `report_siapmutu` | `tr_report_ekspor` (SMKHP) |
-| `dbReportSkp` | `report_skp` | `tr_skp_paska` |
+| `dbReportSkp` | `report_skp` | `tb_skp_paska` |
 | `dbPrimer` | `report_primer` | `tr_laporan_primer_export` |
 | `dbMutu` | `mutu` | data master perizinan |
 | `dbKapal` | `report_kapal` | `tb_cbib_kapal` |
@@ -119,12 +141,8 @@ router. `npm run dev` (nodemon) avoids this.
 All point at the same host today but are treated as separate servers. **Never write a
 cross-database JOIN.** `hc.tb_r_upt` is read into an in-memory `Map`, then merged with
 transaction rows in the service layer (`UptMasterService.applyToRows`,
-`getUptBreakdown`). Sequelize associations are deliberately absent — see the header
-comment in `models/TbRUpt.js`.
-
-Raw SQL in `hc` is schema-qualified (`FROM hc.tb_user`) even though `hc` is already the
-default schema. SQL in `report_siapmutu`, `report_skp`, and `report_primer` is *not*
-qualified, since those instances connect straight to their schema.
+`getUptBreakdown`). Sequelize associations across schemas are deliberately absent — see
+the header comment in `models/TbRUpt.js`.
 
 `DB_PRIMER_*` inherits credentials from `DB_MUTU_*` via fallback in code, so a
 misconfigured env var does not break the connection. `dbMutu` logs a `⚠️` line at boot
@@ -155,7 +173,7 @@ misses them.
 
 ### The `sequelizeHc` vs `dbMaster` naming trap
 
-The reference `models/index.js` exports `sequelizeHc`; this repo's exports it as
+The reference `models/index.js` exports `sequelizeHc`; this repo exports it as
 `dbMaster`. `uptMasterRepository.js` was copied with the reference's name and threw at
 import time. It is fixed to use `dbMaster`, but watch for the same stale identifier
 appearing in any newly copied file. Note this repo has no correctly-named handle for the
@@ -170,8 +188,8 @@ collapse to `15.0`. The rule must be applied **uniformly** in all three places �
 filter, `GROUP BY`, and name lookup — or the same unit appears twice with an identical
 label. Use the exported helpers (`normalizeUptCode`, `expandUptCodeFilter`,
 `buildInClause`, `buildFullUptGroupByExpression`, `mergeUptGroups`) rather than
-hand-rolling SQL; an agent will otherwise filter on `kd_upt=15.0` and silently drop the
-`01.00` rows.
+hand-rolling manual string conditions; an agent will otherwise filter on `kd_upt=15.0`
+and silently drop the `01.00` rows.
 
 `98.0` / `99.0` are dummy units that *do* have `STS_AKTIF = 1`, so they must be excluded
 explicitly via `TEST_UPT_CODES` / `isTestUptCode`.
@@ -182,7 +200,7 @@ through `sanitizeLabel` before returning them.
 ## The master-UPT cache
 
 `src/services/uptMasterService.js` is the **only** master-UPT cache, backed by
-`src/repositories/uptMasterRepository.js` (raw SQL against `hc.tb_r_upt`). TTL cache (default
+`src/repositories/uptMasterRepository.js` (reading through `TbRUpt` model). TTL cache (default
 6h, `UPT_MASTER_CACHE_TTL_MS` / `_HOURS`, clamped 1–12h; 5min after a failed read) with
 single-flight dedup. The `smkhp`, `skp` and `/api/v1/options/upt` endpoints all read through
 it, so UPT naming and code normalisation stay consistent across them.
@@ -193,32 +211,15 @@ a second cache — an earlier `masterCacheService.js` + `masterRepository.js` pa
 that (plain `Map`, no TTL, never read by a route) and was deleted; reintroducing it means
 duplicate master reads and two places to keep `NM_UNIT` sanitisation in sync.
 
-## SQL conventions
+## Data Access & Model conventions
 
-- Raw SQL only (deliberate — see `smkhpRepository.js` comments about a Sequelize
-  division-operator bug). Every user value goes through `replacements`. **Never
-  interpolate a value into a SQL string.** `buildInClause` exists to keep `IN (...)`
-  lists parameterised.
-- A `WHERE`-clause builder that returns `1 = 0` for a rejected input must return the
-  whole `WHERE 1 = 0`, keyword included — returning a bare condition produces invalid SQL.
-  `primerRepository.js` does this for `kd_izin` values outside the whitelist.
-- Date filters use `BETWEEN :startDate AND :endDate` to hit the existing index. Where
-  the column is a datetime the end boundary must be widened to `23:59:59`
-  (`smkhpRepository.normalizeDateBoundary` does this); where it is a plain `DATE`
-  (`tgl_izin`) the widening is harmless but unnecessary.
-- USD is **derived**: `nilai_rupiah / kurs_usd` guarded by `kurs_usd > 0`. There is no
-  `nilai_usd` column.
-- `db.QueryTypes.SELECT` on a Sequelize *instance* is valid here (verified).
-- Country / commodity bucketing (`ASEAN`, `Uni Eropa`, `Udang`, `Rumput Laut`) is done
-  **in memory** in `src/utils/exportGrouping.js`, not in SQL. DB spelling is inconsistent
-  (mixed case, hyphens). ASEAN/EU members must be collapsed into their region bucket
-  *before* the Top-5 ranking, otherwise Malaysia and Singapore surface as separate
-  markets.
-- `report_primer.tr_laporan_primer_export` stores `total_hasil`, `total_minor`,
-  `total_mayor`, `total_kritis` as **VARCHAR**, not numbers. `total_hasil` holds
-  categorical labels (`Cukup`, `Baik`, `Sangat Baik`, `P1`/`P2`/`P3`, `LULUS`, `-`,
-  `NULL`), so it is grouped, never summed. Averages need `CAST(... AS DECIMAL)` or MySQL
-  stringifies and silently returns a wrong mean.
+- **Model-First Standard**: Semua akses data transaksional maupun analitik dilakukan melalui Sequelize Model.
+- **No Raw Database Queries**: Hindari `db.query()`. Gunakan method Sequelize Model (`findAll`, `findOne`, `count`, dll.).
+- **Derived Columns**: USD is **derived**: `nilai_rupiah / kurs_usd` guarded by `kurs_usd > 0`. There is no `nilai_usd` column. Use `sequelize.literal('nilai_rupiah / NULLIF(kurs_usd, 0)')` inside the `attributes` definition.
+- **Date Filters**: Date filters use `BETWEEN :startDate AND :endDate` or Sequelize operators (`Op.between`). Where the column is a datetime the end boundary must be widened to `23:59:59` (`smkhpRepository.normalizeDateBoundary` does this); where it is a plain `DATE` (`tgl_izin`) the widening is harmless but unnecessary.
+- **Never interpolate values into literals**: User values in dynamic literals must use replacement objects (`replacements: { ... }`) to guard against SQL injection.
+- **Country / commodity bucketing**: (`ASEAN`, `Uni Eropa`, `Udang`, `Rumput Laut`) is done **in memory** in `src/utils/exportGrouping.js`, not in SQL. DB spelling is inconsistent (mixed case, hyphens). ASEAN/EU members must be collapsed into their region bucket *before* the Top-5 ranking, otherwise Malaysia and Singapore surface as separate markets.
+- **Primer Data Quirks**: `report_primer.tr_laporan_primer_export` stores `total_hasil`, `total_minor`, `total_mayor`, `total_kritis` as **VARCHAR**, not numbers. `total_hasil` holds categorical labels (`Cukup`, `Baik`, `Sangat Baik`, `P1`/`P2`/`P3`, `LULUS`, `-`, `NULL`), so it is grouped, never summed. Averages need `CAST(... AS DECIMAL)` inside `sequelize.literal` or MySQL stringifies and silently returns a wrong mean.
 
 ## Auth
 
@@ -267,50 +268,22 @@ Prefixes are declared once in `src/routes/index.js`, all under the single
   `top-destinations-by-product`, `transactions`
 - `/api/v1/skp` — `summary`, `trends`, `distribution`, `list`
 - `/api/v1/primer` — `overview`, `certificates`, `export`
-
-- `/api/v1/pasca-panen/haccp` ? `kpi`, `charts`, `table`, all protected by JWT.
+- `/api/v1/pasca-panen/haccp` — `kpi`, `charts`, `table`, all protected by JWT.
   `/api/pasca-panen/haccp` remains a protected compatibility alias.
 
 `GET /api/health` is mounted directly in `app.js`, outside `/api/v1` and unauthenticated.
 
-The JSDoc above each route in `smkhpRoutes.js` still says `/api/v1/exports/...` — stale,
-ignore it. Those comments point at `GET /api/v1/options/upt` for the UPT dropdown, backed
-by `UptMasterService.getOptions()`.
-
-### Express calls static handlers unbound
-
-`router.get('/x', PrimerController.getOverview)` invokes the method with `this ===
-undefined`. A private static helper called as `this.#helper()` therefore throws
-`TypeError: Receiver must be class …` **after** headers are sent, and the client gets a
-`200` with a truncated or empty body. Module-level helper functions have no such problem
-— `primerController.js` uses a module-level `csvCell` for exactly this reason. Never use
-`this` inside a static route handler.
-
-When a streaming handler does fail mid-response, log the error before ending the socket.
-Silently calling `res.end()` hides the bug as a zero-byte download.
-
-## Conventions
-
-- Comments and JSDoc are written in **Indonesian**, and are unusually thorough
-  (explaining *why*, especially around the alias rules and the no-JOIN decision). Match
-  that; add to it rather than deleting it.
-- Services/controllers are classes of `static` methods, exported as a single instance.
-  Private helpers use `#name`. Utils (`uptCode.js`, `exportGrouping.js`, `skpGrouping.js`)
-  are plain pure exported functions — keep them dependency-free and pure so both the
-  current and YoY period paths can share the same bucketing.
-- Export style is mixed: `primer` and `skp` use `class X { static … }` with
-  `export default X`; only `auth` uses
-  `class X { … }` + `export default new X()`. Follow the neighbouring files in the layer
-  rather than normalising everything at once.
-- `smkhp` keeps its reference-project variable names (`ExportService`,
-  `ExportRepository`, `ExportController`) even though the files are `smkhp*`. Renaming
-  them touches four layers for no gain; leave them.
-
 ## Dashboard overview
 
-`dashboardAnalyticsRepository.js` supplies SQL-backed monthly/distribution/activity queries
-for five sources using shared date/UPT/city predicates. Months use YYYY-MM so years
-never collapse into one month. Primer city buckets are mapped through hc.tb_kota to
-active UPTs; unmapped cities are explicitly labeled in national results. Kapal stays excluded from scoped results. SMKHP appears in two KPI pillars
-but is deduplicated in the recent-activity feed. Query errors propagate rather than
-silently becoming zero metrics.
+`dashboardAnalyticsRepository.js` supplies Model-backed monthly/distribution/activity queries
+for five sources using shared date/UPT/city predicates. Models mapped:
+- `ReportEksport` (`tr_report_ekspor` / `dbReport`)
+- `TbSkpPaska` (`tb_skp_paska` / `dbReportSkp`)
+- `Vw07Sertifikasi` (`vw07_sertifikasi` / `dbHaccp`)
+- `TrLaporanPrimerExport` (`tr_laporan_primer_export` / `dbPrimer`)
+- `CbibKapal` (`tb_cbib_kapal` / `dbKapal`)
+
+Months use YYYY-MM so years never collapse into one month. Primer city buckets are mapped
+through `hc.tb_kota` to active UPTs; unmapped cities are explicitly labeled in national results.
+Kapal stays excluded from scoped results. SMKHP appears in two KPI pillars but is deduplicated
+in the recent-activity feed. Query errors propagate rather than silently becoming zero metrics.

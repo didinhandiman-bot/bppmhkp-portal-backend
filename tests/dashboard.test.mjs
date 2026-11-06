@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 globalThis.dashboardQueries=[];
-globalThis.dashboardQuery = async (sql, options) => {
- globalThis.dashboardQueries.push({sql,options});
+globalThis.dashboardQuery = async (rawSql, options) => {
+ // Query kini dihasilkan Sequelize yang mengutip identifier dengan backtick
+ // (`month`, `unitKey`, ...). Simpan SQL ternormalisasi agar assertion
+ // berfokus pada bentuk query, bukan gaya quoting dialect; SQL mentah tetap
+ // tersimpan di `rawSql` agar tidak ada informasi yang hilang.
+ const sql = rawSql.replace(/`/g, '');
+ globalThis.dashboardQueries.push({sql,rawSql,options});
  if(sql.includes('hc.tb_kota')) return [{KODE_KOTA:'3101',KODE_UPT:'15.0'},{KODE_KOTA:'3102',KODE_UPT:'47.0'}];
  if(sql.includes('DATE_FORMAT')) return [{month:'2025-01',total:'2'},{month:'2026-01',total:'3'}];
  if(sql.includes('AS unitKey, COUNT')) return [{unitKey:sql.includes('kd_daerah')?'3101':'15.0',total:'5'}];
@@ -13,8 +18,16 @@ globalThis.dashboardQuery = async (sql, options) => {
 };
 registerHooks({load(url,c,next){
  if(url.includes('/node_modules/dotenv/'))return {format:'module',shortCircuit:true,source:'export default {config(){}};'};
- if(url.endsWith('/src/config/database.js'))return {format:'module',shortCircuit:true,source:"const db={QueryTypes:{SELECT:'SELECT'},query:globalThis.dashboardQuery}; export const dbReport=db,dbMaster=db,dbReportSkp=db,dbHaccp=db,dbPrimer=db,dbKapal=db,dbMutu=db;"};
- if(url.endsWith('/src/models/index.js'))return {format:'module',shortCircuit:true,source:"import {dbReport,dbMaster} from '../config/database.js'; export {dbMaster}; export default {TbRUpt:{},dbMaster,sequelize:dbReport,sequelizeReport:dbReport};"};
+ // Lapisan data kini berjalan lewat Model Sequelize (Model-First Standard),
+ // jadi mock DB-nya adalah instance Sequelize NYATA tanpa koneksi: `define`
+ // dan generator SQL Sequelize tetap bekerja sungguhan, hanya `query` yang
+ // dialihkan ke fungsi tangkap di atas. Mock `src/models/index.js` dihapus
+ // agar definisi model produksi yang dimuat — itulah yang sedang diuji.
+ if(url.endsWith('/src/config/database.js'))return {format:'module',shortCircuit:true,source:`
+   import { Sequelize } from 'sequelize';
+   const make = () => { const s = new Sequelize({ dialect: 'mysql', logging: false }); s.query = globalThis.dashboardQuery; return s; };
+   export const dbReport=make(), dbMaster=make(), dbReportSkp=make(), dbHaccp=make(), dbPrimer=make(), dbKapal=make(), dbMutu=make();
+ `};
  return next(url,c);
 }});
 const UptMasterService=(await import('../src/services/uptMasterService.js')).default;

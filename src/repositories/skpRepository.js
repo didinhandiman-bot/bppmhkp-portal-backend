@@ -1,5 +1,5 @@
-import { QueryTypes } from 'sequelize';
-import { dbReportSkp } from '../config/database.js';
+import { literal } from 'sequelize';
+import { TbSkpPaska } from '../models/index.js';
 import {
   EXPIRING_SOON_DAYS,
   buildSkalaUsahaCase,
@@ -9,7 +9,7 @@ import {
 /**
  * Repository Modul SKP (Sertifikasi Kelayakan Pengolahan) - Pasca Panen.
  *
- * Tanggung jawab repository HANYA komunikasi database: menyusun SQL,
+ * Tanggung jawab repository HANYA komunikasi database: menyusun klausa,
  * mengirim replacement, dan mengembalikan baris mentah. Tidak ada rumus bisnis
  * di sini:
  *
@@ -19,14 +19,22 @@ import {
  * - Normalisasi `skala_usaha` memakai `buildSkalaUsahaCase` dari util, dipakai
  *   sama oleh filter dan GROUP BY agar bucket tidak terpecah.
  *
- * Seluruh query memakai raw SQL + `replacements`, bukan model Sequelize, untuk
- * menjaga konsistensi dengan `smkhpRepository.js` di repo ini. Setiap nilai dari
- * pengguna WAJIB lewat `replacements`; tidak ada interpolasi string ke SQL.
- * Satu-satunya literal yang disisipkan adalah nama kolom hasil whitelist
- * (`#buildOrderBy`) dan ekspresi CASE dari util, keduanya bukan input pengguna.
+ * SELURUH pembacaan dieksekusi lewat Model `TbSkpPaska` (Model-First
+ * Standard): `findAll` untuk baris/agregasi ber-alias, `count` untuk
+ * paginasi. Tidak ada lagi `dbReportSkp.query('... FROM tb_skp_paska')` dengan
+ * string nama tabel. Seluruh nilai dari pengguna tetap WAJIB lewat
+ * `replacements`; tidak ada interpolasi nilai ke SQL. Literal yang disisipkan
+ * hanya nama kolom hasil whitelist (`#buildOrderBy`) dan ekspresi CASE dari
+ * util, keduanya bukan input pengguna.
  *
- * SQL tidak di-prefix nama skema karena `dbReportSkp` sudah terhubung langsung ke
- * `report_skp`. Jangan menambahkan JOIN ke skema `hc` atau `report_siapmutu`.
+ * Model terikat ke koneksi `report_skp`, jadi SQL tidak di-prefix nama skema.
+ * Jangan menambahkan JOIN ke skema `hc` atau `report_siapmutu` (aturan tanpa
+ * JOIN lintas koneksi).
+ *
+ * PERHATIAN Model-First: klausa `WHERE` tidak boleh ikut ditulis di dalam
+ * string literal — generator Sequelize menambahkannya sendiri (`mainQueryItems
+ * push ' WHERE ' + where`), sehingga menulis `'WHERE ...'` akan menghasilkan
+ * `WHERE WHERE ...` dan gagal di MySQL. Lihat `#whereLiteral()`.
  */
 class SkpRepository {
   /**
@@ -57,9 +65,10 @@ class SkpRepository {
    * Fungsi ini sengaja mengembalikan ARRAY kondisi, bukan fragmen `WHERE ...`,
    * karena pemanggil butuh menempelkan kondisi tambahan (pencarian, status)
    * dan karena `findSummaryMetrics` memerlukan rentang dua tahun sekaligus.
-   * Gunakan `SkpRepository.#toWhereClause()` untuk merakitnya.
+   * Gunakan `SkpRepository.#whereLiteral()` untuk merakitnya menjadi literal
+   * siap pakai pada opsi `where` Model.
    *
-   * Rentang tanggal memakai bentuk `>= :start AND < :endNext` (bukan
+   * Rentang tanggal memakai bentuk `>= :rangeStart AND < :rangeEnd` (bukan
    * `YEAR(tanggal_terbit) = :year`) supaya tidak membungkus kolom dan tetap
    * sargable. Filter `skala_usaha` memakai ekspresi CASE yang sama dengan
    * `GROUP BY`; kalau filter memakai nilai mentah, "Mikro" tidak akan menangkap
@@ -101,13 +110,18 @@ class SkpRepository {
   }
 
   /**
-   * Merakit daftar kondisi menjadi klausa `WHERE`.
+   * Merakit daftar kondisi menjadi literal `WHERE` untuk opsi `where` Model.
+   *
+   * Sengaja TANPA kata kunci `WHERE`: generator Sequelize menambahkannya
+   * sendiri, sehingga menyertakannya akan menghasilkan `WHERE WHERE ...`.
+   * Seluruh nilai pengguna sudah berada di `replacements` yang dikirim
+   * bersamaan dengan `findAll`/`count`.
    *
    * @param {string[]} conditions Kondisi hasil `#buildConditions`.
-   * @returns {string} Fragmen `WHERE ...`.
+   * @returns {import('sequelize').Literal} Literal kondisi yang di-AND-kan.
    */
-  static #toWhereClause(conditions) {
-    return `WHERE ${conditions.join(' AND ')}`;
+  static #whereLiteral(conditions) {
+    return literal(conditions.join(' AND '));
   }
 
   /**
@@ -122,6 +136,10 @@ class SkpRepository {
    * `totalAktif`, `totalExpired`, dan `totalUpi` sengaja ikut dijaga agar hanya
    * menghitung baris tahun berjalan, supaya angkanya konsisten dengan
    * `totalTerbit` yang ditampilkan di sebelahnya.
+   *
+   * Memakai `findAll` dengan atribut `[literal(...), alias]` (bukan
+   * `Model.count`) karena kelimanya harus dihitung dalam SATU pass tabel —
+   * `count` hanya menghasilkan satu angka.
    *
    * @param {Object} filter Filter `{ year, provinsiId, skalaUsaha, peringkat }`.
    * @returns {Promise<Object>} Agregasi mentah (masih string dari MySQL).
@@ -143,31 +161,28 @@ class SkpRepository {
     const inCurrentYear = 'tanggal_terbit >= :currentStart AND tanggal_terbit < :currentEnd';
     const inPrevYear = 'tanggal_terbit >= :prevStart AND tanggal_terbit < :prevEnd';
 
-    const query = `
-      SELECT
-        COUNT(CASE WHEN ${inCurrentYear} THEN 1 END) AS totalTerbit,
-        COUNT(CASE WHEN ${inPrevYear} THEN 1 END) AS totalTerbitPrevYear,
-        COUNT(CASE
+    const rows = await TbSkpPaska.findAll({
+      attributes: [
+        [literal(`COUNT(CASE WHEN ${inCurrentYear} THEN 1 END)`), 'totalTerbit'],
+        [literal(`COUNT(CASE WHEN ${inPrevYear} THEN 1 END)`), 'totalTerbitPrevYear'],
+        [literal(`COUNT(CASE
           WHEN ${inCurrentYear}
             AND tanggal_kadaluarsa IS NOT NULL
             AND tanggal_kadaluarsa >= CURRENT_DATE()
           THEN 1
-        END) AS totalAktif,
-        COUNT(CASE
+        END)`), 'totalAktif'],
+        [literal(`COUNT(CASE
           WHEN ${inCurrentYear}
             AND tanggal_kadaluarsa IS NOT NULL
             AND tanggal_kadaluarsa < CURRENT_DATE()
           THEN 1
-        END) AS totalExpired,
-        COUNT(DISTINCT CASE
+        END)`), 'totalExpired'],
+        [literal(`COUNT(DISTINCT CASE
           WHEN ${inCurrentYear}
           THEN COALESCE(NULLIF(TRIM(nib), ''), NULLIF(TRIM(nama_upi), ''))
-        END) AS totalUpi
-      FROM tb_skp_paska
-      ${SkpRepository.#toWhereClause(conditions)}
-    `;
-
-    const [row] = await dbReportSkp.query(query, {
+        END)`), 'totalUpi'],
+      ],
+      where: SkpRepository.#whereLiteral(conditions),
       replacements: {
         ...replacements,
         currentStart: currentRange.start,
@@ -175,9 +190,12 @@ class SkpRepository {
         prevStart: prevRange.start,
         prevEnd: prevRange.endNext,
       },
-      type: QueryTypes.SELECT,
+      // Tanpa `raw`, alias yang bukan atribut model (`totalTerbit`, ...) hilang
+      // karena Sequelize membangun instance Model dari hasil.
+      raw: true,
     });
 
+    const [row] = rows;
     return row;
   }
 
@@ -202,20 +220,17 @@ class SkpRepository {
       endNext: currentRange.endNext,
     });
 
-    const query = `
-      SELECT
-        YEAR(tanggal_terbit) AS tahun,
-        MONTH(tanggal_terbit) AS bulan,
-        COUNT(id) AS total
-      FROM tb_skp_paska
-      ${SkpRepository.#toWhereClause(conditions)}
-      GROUP BY YEAR(tanggal_terbit), MONTH(tanggal_terbit)
-      ORDER BY tahun ASC, bulan ASC
-    `;
-
-    const rows = await dbReportSkp.query(query, {
+    const rows = await TbSkpPaska.findAll({
+      attributes: [
+        [literal('YEAR(tanggal_terbit)'), 'tahun'],
+        [literal('MONTH(tanggal_terbit)'), 'bulan'],
+        [literal('COUNT(id)'), 'total'],
+      ],
+      where: SkpRepository.#whereLiteral(conditions),
+      group: [literal('YEAR(tanggal_terbit)'), literal('MONTH(tanggal_terbit)')],
+      order: [[literal('tahun'), 'ASC'], [literal('bulan'), 'ASC']],
       replacements,
-      type: QueryTypes.SELECT,
+      raw: true,
     });
 
     return rows;
@@ -235,60 +250,69 @@ class SkpRepository {
       filter,
       getYearRange(Number(filter.year)),
     );
-    const where = SkpRepository.#toWhereClause(conditions);
     const skalaCase = buildSkalaUsahaCase('skala_usaha');
 
-    const byPeringkatQuery = `
-      SELECT
-        NULLIF(UPPER(TRIM(peringkat)), '') AS label,
-        COUNT(id) AS total
-      FROM tb_skp_paska
-      ${where}
-      GROUP BY NULLIF(UPPER(TRIM(peringkat)), '')
-      ORDER BY total DESC, label ASC
-    `;
+    // Literal WHERE dibuat terpisah per query: keempat `findAll` berjalan
+    // bersamaan, dan satu objek literal jangan dibagikan antar permintaan.
+    const byPeringkatQuery = TbSkpPaska.findAll({
+      attributes: [
+        [literal(`NULLIF(UPPER(TRIM(peringkat)), '')`), 'label'],
+        [literal('COUNT(id)'), 'total'],
+      ],
+      where: SkpRepository.#whereLiteral(conditions),
+      group: [literal(`NULLIF(UPPER(TRIM(peringkat)), '')`)],
+      order: [[literal('total'), 'DESC'], [literal('label'), 'ASC']],
+      replacements: { ...replacements },
+      raw: true,
+    });
 
     // `Lainnya` menggabungkan placeholder yang tidak bisa dipetakan ke empat
     // bucket (mis. nilai "-"), sehingga total bucket selalu sama dengan
     // `totalTerbit` pada summary.
-    const bySkalaUsahaQuery = `
-      SELECT
-        ${skalaCase} AS label,
-        COUNT(id) AS total
-      FROM tb_skp_paska
-      ${where}
-      GROUP BY ${skalaCase}
-      ORDER BY total DESC, label ASC
-    `;
+    const bySkalaUsahaQuery = TbSkpPaska.findAll({
+      attributes: [[literal(skalaCase), 'label'], [literal('COUNT(id)'), 'total']],
+      where: SkpRepository.#whereLiteral(conditions),
+      group: [literal(skalaCase)],
+      order: [[literal('total'), 'DESC'], [literal('label'), 'ASC']],
+      replacements: { ...replacements },
+      raw: true,
+    });
 
-    const topJenisOlahanQuery = `
-      SELECT
-        NULLIF(TRIM(jenis_olahan), '') AS label,
-        COUNT(id) AS total
-      FROM tb_skp_paska
-      ${where}
-      AND NULLIF(TRIM(jenis_olahan), '') IS NOT NULL
-      GROUP BY NULLIF(TRIM(jenis_olahan), '')
-      ORDER BY total DESC, label ASC
-      LIMIT 10
-    `;
+    const topJenisOlahanQuery = TbSkpPaska.findAll({
+      attributes: [
+        [literal(`NULLIF(TRIM(jenis_olahan), '')`), 'label'],
+        [literal('COUNT(id)'), 'total'],
+      ],
+      // Kondisi ekstra digabung ke literal yang sama; tidak perlu `WHERE`
+      // tambahan karena generator Sequelize hanya menambahkannya sekali.
+      where: literal(
+        `${conditions.join(' AND ')} AND NULLIF(TRIM(jenis_olahan), '') IS NOT NULL`,
+      ),
+      group: [literal(`NULLIF(TRIM(jenis_olahan), '')`)],
+      order: [[literal('total'), 'DESC'], [literal('label'), 'ASC']],
+      limit: 10,
+      replacements: { ...replacements },
+      raw: true,
+    });
 
-    const topWilayahQuery = `
-      SELECT
-        NULLIF(TRIM(provinsi), '') AS label,
-        COUNT(id) AS total
-      FROM tb_skp_paska
-      ${where}
-      GROUP BY NULLIF(TRIM(provinsi), '')
-      ORDER BY total DESC, label ASC
-      LIMIT 10
-    `;
+    const topWilayahQuery = TbSkpPaska.findAll({
+      attributes: [
+        [literal(`NULLIF(TRIM(provinsi), '')`), 'label'],
+        [literal('COUNT(id)'), 'total'],
+      ],
+      where: SkpRepository.#whereLiteral(conditions),
+      group: [literal(`NULLIF(TRIM(provinsi), '')`)],
+      order: [[literal('total'), 'DESC'], [literal('label'), 'ASC']],
+      limit: 10,
+      replacements: { ...replacements },
+      raw: true,
+    });
 
     const [byPeringkat, bySkalaUsaha, topJenisOlahan, topWilayah] = await Promise.all([
-      dbReportSkp.query(byPeringkatQuery, { replacements, type: QueryTypes.SELECT }),
-      dbReportSkp.query(bySkalaUsahaQuery, { replacements, type: QueryTypes.SELECT }),
-      dbReportSkp.query(topJenisOlahanQuery, { replacements, type: QueryTypes.SELECT }),
-      dbReportSkp.query(topWilayahQuery, { replacements, type: QueryTypes.SELECT }),
+      byPeringkatQuery,
+      bySkalaUsahaQuery,
+      topJenisOlahanQuery,
+      topWilayahQuery,
     ]);
 
     return { byPeringkat, bySkalaUsaha, topJenisOlahan, topWilayah };
@@ -298,6 +322,8 @@ class SkpRepository {
    * Menghitung jumlah baris untuk paginasi.
    *
    * Dipisah dari query data supaya `LIMIT` tidak memotong hasil `COUNT`.
+   * Memakai `TbSkpPaska.count` karena hanya satu angka yang dibutuhkan;
+   * klausa `WHERE`-nya literal sehingga seluruh nilai tetap dari `replacements`.
    *
    * @param {Object} filter Filter yang sudah lengkap termasuk `search` dan `status`.
    * @returns {Promise<number>} Jumlah baris yang cocok.
@@ -310,18 +336,12 @@ class SkpRepository {
     const { conditions: extra, replacements: extraReplacements } =
       SkpRepository.#buildOptionalConditions(filter);
 
-    const query = `
-      SELECT COUNT(id) AS totalRows
-      FROM tb_skp_paska
-      ${SkpRepository.#toWhereClause([...conditions, ...extra])}
-    `;
-
-    const [row] = await dbReportSkp.query(query, {
+    const total = await TbSkpPaska.count({
+      where: SkpRepository.#whereLiteral([...conditions, ...extra]),
       replacements: { ...replacements, ...extraReplacements },
-      type: QueryTypes.SELECT,
     });
 
-    return Number(row?.totalRows) || 0;
+    return Number(total) || 0;
   }
 
   /**
@@ -339,44 +359,44 @@ class SkpRepository {
       SkpRepository.#buildOptionalConditions(filter);
     const orderBy = SkpRepository.#buildOrderBy(filter);
 
-    const query = `
-      SELECT
-        id,
-        nama_upi,
-        nib,
-        provinsi_id,
-        provinsi,
-        regency_id,
-        kota_kabupaten,
-        alamat,
-        skala_usaha,
-        jenis_permohonan,
-        tanggal_pengajuan,
-        tanggal_rekomendasi,
-        tanggal_terbit,
-        tanggal_kadaluarsa,
-        nomor_skp,
-        nama_produk,
-        jenis_olahan,
-        peringkat,
-        ${SkpRepository.#buildStatusCase()} AS status_skp
-      FROM tb_skp_paska
-      ${SkpRepository.#toWhereClause([...conditions, ...extra])}
-      ORDER BY ${orderBy}
-      LIMIT :limit OFFSET :offset
-    `;
-
-    const rows = await dbReportSkp.query(query, {
+    const rows = await TbSkpPaska.findAll({
+      attributes: [
+        'id',
+        'nama_upi',
+        'nib',
+        'provinsi_id',
+        'provinsi',
+        'regency_id',
+        'kota_kabupaten',
+        'alamat',
+        'skala_usaha',
+        'jenis_permohonan',
+        'tanggal_pengajuan',
+        'tanggal_rekomendasi',
+        'tanggal_terbit',
+        'tanggal_kadaluarsa',
+        'nomor_skp',
+        'nama_produk',
+        'jenis_olahan',
+        'peringkat',
+        [literal(SkpRepository.#buildStatusCase()), 'status_skp'],
+      ],
+      where: SkpRepository.#whereLiteral([...conditions, ...extra]),
+      order: [literal(orderBy)],
+      // `limit`/`offset` harus number; Sequelize menyisipkannya sebagai literal
+      // numerik (bukan replacement), jadi keduanya dinormalkan dulu di sini.
+      limit: Number(filter.limit) || 10,
+      offset: Number(filter.offset) || 0,
       replacements: {
         ...replacements,
         ...extraReplacements,
         // Selalu dikirim, bukan hanya saat `status=expiring_soon`, karena
         // ekspresi status kolom selalu memakainya.
         expiringDays: EXPIRING_SOON_DAYS,
-        limit: Number(filter.limit) || 10,
-        offset: Number(filter.offset) || 0,
       },
-      type: QueryTypes.SELECT,
+      // Tanpa `raw`, `status_skp` (alias hasil literal, bukan atribut model)
+      // hilang dari hasil dan kolom DATE kembali sebagai instance Date.
+      raw: true,
     });
 
     return rows;
@@ -405,7 +425,7 @@ class SkpRepository {
    *
    * `search` di-escape lebih dulu: nilai mentah bisa mengandung `%` atau `_`,
    * yang pada `LIKE` berarti wildcard. Tanpa `ESCAPE`, pencarian "100%" akan
-   * mencocokikan semua baris.
+   * mencocokkan semua baris.
    *
    * @param {Object} filter Filter yang mungkin berisi `search` dan `status`.
    * @returns {{conditions: string[], replacements: Object}}
