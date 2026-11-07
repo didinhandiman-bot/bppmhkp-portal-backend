@@ -1,46 +1,65 @@
-import { QueryTypes } from 'sequelize';
-import { dbMaster } from '../config/database.js';
+import { TbUser, TbRole, dbMaster } from '../models/index.js';
 
 class AuthRepository {
   async findByUsername(username) {
-    const query = `
-      SELECT 
-        u.USER_ID,
-        u.ROLE AS ROLE_ID,
-        r.role_user AS ROLE_NAME,
-        u.KODE_TRADER,
-        u.USERNAME,
-        u.PASSWORD,
-        u.NAMA,
-        u.EMAIL,
-        u.JABATAN,
-        u.KD_UNIT,
-        u.STATUS
-      FROM hc.tb_user u
-      LEFT JOIN hc.tb_role r ON CAST(u.ROLE AS UNSIGNED) = r.id
-      WHERE u.USERNAME = :username
-      LIMIT 1
-    `;
-    const [user] = await dbMaster.query(query, {
-      replacements: { username },
-      type: QueryTypes.SELECT,
+    const user = await TbUser.findOne({
+      attributes: [
+        'USER_ID',
+        'ROLE',
+        'KODE_TRADER',
+        'USERNAME',
+        'PASSWORD',
+        'NAMA',
+        'EMAIL',
+        'JABATAN',
+        'KD_UNIT',
+        'STATUS',
+      ],
+      include: [
+        {
+          model: TbRole,
+          as: 'role',
+          attributes: ['role_user'],
+          required: false,
+        },
+      ],
+      where: { USERNAME: username },
+      limit: 1,
     });
-    return user;
+
+    if (!user) {
+      return undefined;
+    }
+
+    const plain = user.get({ plain: true });
+
+    return {
+      USER_ID: plain.USER_ID,
+      ROLE_ID: plain.ROLE,
+      ROLE_NAME: plain.role ? plain.role.role_user : null,
+      KODE_TRADER: plain.KODE_TRADER,
+      USERNAME: plain.USERNAME,
+      PASSWORD: plain.PASSWORD,
+      NAMA: plain.NAMA,
+      EMAIL: plain.EMAIL,
+      JABATAN: plain.JABATAN,
+      KD_UNIT: plain.KD_UNIT,
+      STATUS: plain.STATUS,
+    };
   }
 
   async updateLoginSession(userId, ipAddress) {
-    const query = `
-      UPDATE hc.tb_user
-      SET 
-        LAST_LOGIN = DATE_LOGIN,
-        DATE_LOGIN = NOW(),
-        IP_LOGIN = :ipAddress,
-        STS_LOGIN = '1'
-      WHERE USER_ID = :userId
-    `;
-    await dbMaster.query(query, {
-      replacements: { userId, ipAddress: ipAddress || '127.0.0.1' },
-    });
+    await TbUser.update(
+      {
+        LAST_LOGIN: dbMaster.literal('DATE_LOGIN'),
+        DATE_LOGIN: dbMaster.literal('NOW()'),
+        IP_LOGIN: ipAddress || '127.0.0.1',
+        STS_LOGIN: '1',
+      },
+      {
+        where: { USER_ID: userId },
+      }
+    );
   }
 }
 
