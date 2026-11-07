@@ -16,6 +16,15 @@ export const dbMaster = new Sequelize(
   }
 );
 
+/**
+ * Sequelize menonaktifkan dukungan `schema` pada dialect MySQL, sehingga
+ * `schema: 'hc'` digabung menjadi satu identifier (`` `hc.tb_kota` ``) dan
+ * gagal di MySQL. Model master `hc` (`TbKota`) memakai skema eksplisit agar
+ * query menyebut `hc`.`tb_kota`; aktifkan dukungan schema pada instance ini
+ * saja. Tidak ada model lain yang memakai `schema`, jadi efeknya terbatas.
+ */
+dbMaster.dialect.supports.schemas = true;
+
 export const dbReport = new Sequelize(
   process.env.DB_REPORT_DEFAULT || 'report_siapmutu',
   process.env.DB_REPORT_USER,
