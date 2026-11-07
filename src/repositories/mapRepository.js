@@ -1,5 +1,10 @@
-import { QueryTypes } from 'sequelize';
-import { dbPrimer, dbKapal, dbReportSkp, dbHaccp } from '../config/database.js';
+import { literal } from 'sequelize';
+import {
+  TrLaporanPrimerExport,
+  CbibKapal,
+  TbSkpPaska,
+  Vw07Sertifikasi,
+} from '../models/index.js';
 
 /**
  * Repository untuk endpoint peta sebaran penerbitan sertifikasi
@@ -10,6 +15,12 @@ import { dbPrimer, dbKapal, dbReportSkp, dbHaccp } from '../config/database.js';
  * pemetaan kode provinsi, penamaan field payload, dan penggabungan antar-
  * sumber seluruhnya dilakukan di service (`mapService.js`).
  *
+ * SELURUH pembacaan dieksekusi lewat method Model Sequelize
+ * (`Model.findAll`) dengan agregasi `sequelize.literal()` (Model-First
+ * Standard). Tidak ada lagi `db.query(...)` / `QueryTypes.SELECT` maupun
+ * string nama tabel manual — model yang dipakai adalah `TrLaporanPrimerExport`,
+ * `CbibKapal`, `TbSkpPaska`, dan `Vw07Sertifikasi` dari `../models/index.js`.
+ *
  * ATURAN DUAL-DATABASE: setiap query hanya menyentuh SATU schema. Tidak ada
  * JOIN lintas-database (mis. `report_primer` dengan `report_kapal`) — data
  * digabung in-memory di service. Karena itu keempat method di bawah menerima
@@ -18,6 +29,7 @@ import { dbPrimer, dbKapal, dbReportSkp, dbHaccp } from '../config/database.js';
  * Kolom tanggal bersumber dari kolom `DATE` (`tgl_izin`, `tgl_terbit`,
  * `tanggal_terbit`), sehingga `BETWEEN :startDate AND :endDate` sudah
  * mencakup hari terakhir bila service mengirim batas atas jam `23:59:59`.
+ * Nilai tanggal tetap masuk lewat `replacements`, bukan interpolasi string.
  *
  * Catatan nama kolom provinsi yang sudah diverifikasi langsung ke server:
  * - `tb_skp_paska`   : `provinsi_id` (VARCHAR(2), kode BPS) + `provinsi`.
@@ -45,16 +57,17 @@ class MapRepository {
    * @returns {Promise<Array<{provinsi: string, kd_izin: string, total: number}>>}
    */
   static async getPrimerByProvince(startDate, endDate) {
-    const rows = await dbPrimer.query(
-      `SELECT
-         uraian_propinsi AS provinsi,
-         kd_izin,
-         COUNT(*)        AS total
-       FROM tr_laporan_primer_export
-       WHERE tgl_izin BETWEEN :startDate AND :endDate
-       GROUP BY uraian_propinsi, kd_izin`,
-      { replacements: { startDate, endDate }, type: QueryTypes.SELECT }
-    );
+    const rows = await TrLaporanPrimerExport.findAll({
+      attributes: [
+        [literal('uraian_propinsi'), 'provinsi'],
+        [literal('kd_izin'), 'kd_izin'],
+        [literal('COUNT(*)'), 'total'],
+      ],
+      where: literal('tgl_izin BETWEEN :startDate AND :endDate'),
+      group: [literal('uraian_propinsi'), literal('kd_izin')],
+      replacements: { startDate, endDate },
+      raw: true,
+    });
 
     return rows.map((row) => ({
       provinsi: row.provinsi,
@@ -75,13 +88,16 @@ class MapRepository {
    * @returns {Promise<Array<{kode_provinsi: string, total: number}>>}
    */
   static async getKapalByProvince(startDate, endDate) {
-    const rows = await dbKapal.query(
-      `SELECT kode_provinsi, COUNT(*) AS total
-       FROM tb_cbib_kapal
-       WHERE tgl_terbit BETWEEN :startDate AND :endDate
-       GROUP BY kode_provinsi`,
-      { replacements: { startDate, endDate }, type: QueryTypes.SELECT }
-    );
+    const rows = await CbibKapal.findAll({
+      attributes: [
+        [literal('kode_provinsi'), 'kode_provinsi'],
+        [literal('COUNT(*)'), 'total'],
+      ],
+      where: literal('tgl_terbit BETWEEN :startDate AND :endDate'),
+      group: [literal('kode_provinsi')],
+      replacements: { startDate, endDate },
+      raw: true,
+    });
 
     return rows.map((row) => ({
       kode_provinsi: row.kode_provinsi,
@@ -101,13 +117,17 @@ class MapRepository {
    * @returns {Promise<Array<{provinsi_id: string, provinsi: string, total: number}>>}
    */
   static async getSkpByProvince(startDate, endDate) {
-    const rows = await dbReportSkp.query(
-      `SELECT provinsi_id, provinsi, COUNT(*) AS total
-       FROM tb_skp_paska
-       WHERE tanggal_terbit BETWEEN :startDate AND :endDate
-       GROUP BY provinsi_id, provinsi`,
-      { replacements: { startDate, endDate }, type: QueryTypes.SELECT }
-    );
+    const rows = await TbSkpPaska.findAll({
+      attributes: [
+        [literal('provinsi_id'), 'provinsi_id'],
+        [literal('provinsi'), 'provinsi'],
+        [literal('COUNT(*)'), 'total'],
+      ],
+      where: literal('tanggal_terbit BETWEEN :startDate AND :endDate'),
+      group: [literal('provinsi_id'), literal('provinsi')],
+      replacements: { startDate, endDate },
+      raw: true,
+    });
 
     return rows.map((row) => ({
       provinsi_id: row.provinsi_id,
@@ -134,19 +154,20 @@ class MapRepository {
    * @returns {Promise<Array<{id_provinsi: number, nm_provinsi: string, gradeA: number, gradeB: number, gradeC: number, jumlahUpi: number}>>}
    */
   static async getHaccpByProvince(startDate, endDate) {
-    const rows = await dbHaccp.query(
-      `SELECT
-         id_provinsi,
-         nm_provinsi,
-         SUM(CASE WHEN TRIM(UPPER(grade)) = 'A' THEN 1 ELSE 0 END) AS gradeA,
-         SUM(CASE WHEN TRIM(UPPER(grade)) = 'B' THEN 1 ELSE 0 END) AS gradeB,
-         SUM(CASE WHEN TRIM(UPPER(grade)) = 'C' THEN 1 ELSE 0 END) AS gradeC,
-         COUNT(DISTINCT id_upi) AS jumlahUpi
-       FROM report_haccp.vw07_sertifikasi
-       WHERE tgl_terbit BETWEEN :startDate AND :endDate
-       GROUP BY id_provinsi, nm_provinsi`,
-      { replacements: { startDate, endDate }, type: QueryTypes.SELECT }
-    );
+    const rows = await Vw07Sertifikasi.findAll({
+      attributes: [
+        [literal('id_provinsi'), 'id_provinsi'],
+        [literal('nm_provinsi'), 'nm_provinsi'],
+        [literal("SUM(CASE WHEN TRIM(UPPER(grade)) = 'A' THEN 1 ELSE 0 END)"), 'gradeA'],
+        [literal("SUM(CASE WHEN TRIM(UPPER(grade)) = 'B' THEN 1 ELSE 0 END)"), 'gradeB'],
+        [literal("SUM(CASE WHEN TRIM(UPPER(grade)) = 'C' THEN 1 ELSE 0 END)"), 'gradeC'],
+        [literal('COUNT(DISTINCT id_upi)'), 'jumlahUpi'],
+      ],
+      where: literal('tgl_terbit BETWEEN :startDate AND :endDate'),
+      group: [literal('id_provinsi'), literal('nm_provinsi')],
+      replacements: { startDate, endDate },
+      raw: true,
+    });
 
     return rows.map((row) => ({
       id_provinsi: row.id_provinsi,
