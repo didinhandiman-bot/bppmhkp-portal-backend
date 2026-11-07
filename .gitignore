@@ -93,3 +93,5 @@ desktop.ini
 *.bak
 .eslintcache
 .node_repl_history
+
+opencode.json

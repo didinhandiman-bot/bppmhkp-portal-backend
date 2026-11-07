@@ -1,4 +1,5 @@
-import models from '../models/index.js';
+import { literal } from 'sequelize';
+import { ReportEksport } from '../models/index.js';
 import {
   buildFullUptGroupByExpression,
   buildInClause,
@@ -8,26 +9,39 @@ import {
   TRANSACTION_UPT_CODE_COLUMN,
 } from '../utils/uptCode.js';
 
-// Handle both `default export` and namespace export patterns
-const modelsInstance = models?.default || models;
-const { ReportEksport, sequelize, sequelizeReport } = modelsInstance || {};
-
-if (!sequelize) {
-  throw new Error('Sequelize instance not found in models/index.js — check export structure');
-}
-
-/**
- * Instan query transaksi.
- *
- * Sengaja menunjuk koneksi `report_siapmutu` (`sequelizeReport`), bukan koneksi
- * master UPT, karena seluruh query di kelas ini hanya menyentuh
- * `tr_report_ekspor`.
- */
-const db = sequelizeReport ?? sequelize;
-
 /** Prefix placeholder untuk filter kode UPT. */
 const UPT_CODE_PARAM_PREFIX = 'uptCode';
 
+/**
+ * Rakit kondisi (tanpa kata kunci `WHERE`) menjadi opsi `where` + `replacements`
+ * siap pakai pada `Model.findAll`.
+ *
+ * Generator Sequelize menambahkan `WHERE` sendiri, sehingga menyertakannya di
+ * literal akan menghasilkan `WHERE WHERE ...`. Seluruh nilai pengguna tetap
+ * berada di `replacements`, bukan di dalam string SQL.
+ *
+ * @param {string[]} conditions Fragmen kondisi yang disambung `AND`.
+ * @param {Record<string, unknown>} replacements Nilai binding yang sudah diisi.
+ * @returns {object} Opsi tambahan untuk dipadankan ke options Model.
+ */
+function whereOptions(conditions, replacements) {
+  return conditions.length
+    ? { where: literal(conditions.join(' AND ')), replacements }
+    : { replacements };
+}
+
+/**
+ * Repository transaksi ekspor (SMKHP) — `report_siapmutu.tr_report_ekspor`.
+ *
+ * SELURUH pembacaan dieksekusi lewat Model Sequelize `ReportEksport`
+ * (Model-First Standard): `findAll` untuk baris/agregasi ber-alias dan
+ * `raw: true` agar alias non-atribut tidak hilang. Tidak ada lagi
+ * `db.query('SELECT ... FROM tr_report_ekspor')` dengan string nama tabel.
+ *
+ * Nilai dari pengguna selalu lewat `replacements`; tidak ada interpolasi nilai
+ * ke SQL. Literal yang disisipkan hanya nama kolom/ekspresi internal dan
+ * fragmen kondisi yang seluruh nilainya sudah dibinding.
+ */
 class ExportRepository {
 
   /**
@@ -119,33 +133,26 @@ class ExportRepository {
 
   /**
    * Menghitung agregat untuk Hero Metric & KPI Cards.
-   * Menggunakan raw SQL query untuk menghindari bug operator division di Sequelize.
    */
   static async getKpiSummary(filters = {}) {
-    const { whereStr, replacements } = this.buildWhereClause(filters);
+    const { conditions, replacements } = this.buildWhereClause(filters);
 
-    const sql = `
-      SELECT
-        COALESCE(SUM(nilai_rupiah), 0) AS totalNilaiRupiah,
-        COALESCE(SUM( CASE WHEN kurs_usd IS NOT NULL AND kurs_usd > 0 THEN nilai_rupiah / kurs_usd ELSE 0 END ), 0) AS totalNilaiUsd,
-        COALESCE(SUM(netto), 0) AS totalNettoKg,
-        COUNT(DISTINCT nomor_aju) AS totalDokumenAju,
-        COUNT(DISTINCT no_hc) AS totalSertifikatHc,
-        COUNT(DISTINCT nama_upi) AS totalUpiAktif,
-        COUNT(DISTINCT nama_trader) AS totalTraderAktif,
-        COUNT(DISTINCT negara_tujuan) AS totalNegaraTujuan
-      FROM tr_report_ekspor
-      ${whereStr}
-    `;
-
-    const results = await db.query(sql, {
-      replacements,
-      replacements,
-      type: db.QueryTypes.SELECT,
+    const rows = await ReportEksport.findAll({
+      attributes: [
+        [literal('COALESCE(SUM(nilai_rupiah), 0)'), 'totalNilaiRupiah'],
+        [literal('COALESCE(SUM( CASE WHEN kurs_usd IS NOT NULL AND kurs_usd > 0 THEN nilai_rupiah / kurs_usd ELSE 0 END ), 0)'), 'totalNilaiUsd'],
+        [literal('COALESCE(SUM(netto), 0)'), 'totalNettoKg'],
+        [literal('COUNT(DISTINCT nomor_aju)'), 'totalDokumenAju'],
+        [literal('COUNT(DISTINCT no_hc)'), 'totalSertifikatHc'],
+        [literal('COUNT(DISTINCT nama_upi)'), 'totalUpiAktif'],
+        [literal('COUNT(DISTINCT nama_trader)'), 'totalTraderAktif'],
+        [literal('COUNT(DISTINCT negara_tujuan)'), 'totalNegaraTujuan'],
+      ],
+      ...whereOptions(conditions, replacements),
       raw: true,
     });
 
-    if (!Array.isArray(results) || results.length === 0) {
+    if (!Array.isArray(rows) || rows.length === 0) {
       return {
         totalNilaiRupiah: 0,
         totalNilaiUsd: 0,
@@ -158,7 +165,7 @@ class ExportRepository {
       };
     }
 
-    return results[0];
+    return rows[0];
   }
 
   /**
@@ -166,22 +173,15 @@ class ExportRepository {
    * Dipakai menghitung pembanding Year-over-Year secara efisien.
    */
   static async getTotalNilaiRupiah(filters = {}) {
-    const { whereStr, replacements } = this.buildWhereClause(filters);
+    const { conditions, replacements } = this.buildWhereClause(filters);
 
-    const sql = `
-      SELECT COALESCE(SUM(nilai_rupiah), 0) AS totalNilaiRupiah
-      FROM tr_report_ekspor
-      ${whereStr}
-    `;
-
-    const results = await db.query(sql, {
-      replacements,
-      replacements,
-      type: db.QueryTypes.SELECT,
+    const rows = await ReportEksport.findAll({
+      attributes: [[literal('COALESCE(SUM(nilai_rupiah), 0)'), 'totalNilaiRupiah']],
+      ...whereOptions(conditions, replacements),
       raw: true,
     });
 
-    return (Array.isArray(results) && results[0]) || { totalNilaiRupiah: 0 };
+    return (Array.isArray(rows) && rows[0]) || { totalNilaiRupiah: 0 };
   }
 
   /**
@@ -192,22 +192,25 @@ class ExportRepository {
    * `GET /api/v1/options/upt`, karena hanya master yang memuat kode unit.
    */
   static async getUpts(filters = {}) {
-    const { whereStr, replacements } = this.buildWhereClause(filters);
-    const sql = `
-      SELECT DISTINCT TRIM(REGEXP_REPLACE(nama_upt, '[[:space:]]+', ' ')) AS nama_upt
-      FROM tr_report_ekspor
-      ${whereStr || 'WHERE 1 = 1'} AND nama_upt IS NOT NULL
-        AND TRIM(REGEXP_REPLACE(nama_upt, '[[:space:]]+', ' ')) <> ''
-      ORDER BY nama_upt ASC
-    `;
+    const { conditions, replacements } = this.buildWhereClause(filters);
+    const normalizedName = "TRIM(REGEXP_REPLACE(nama_upt, '[[:space:]]+', ' '))";
 
-    const results = await db.query(sql, {
-      replacements,
-      type: db.QueryTypes.SELECT,
+    // DISTINCT atas ekspresi setara dengan GROUP BY ekspresi yang sama.
+    const allConditions = [
+      ...conditions,
+      'nama_upt IS NOT NULL',
+      `${normalizedName} <> ''`,
+    ];
+
+    const rows = await ReportEksport.findAll({
+      attributes: [[literal(normalizedName), 'nama_upt']],
+      ...whereOptions(allConditions, replacements),
+      group: [literal(normalizedName)],
+      order: [[literal('nama_upt'), 'ASC']],
       raw: true,
     });
 
-    return Array.isArray(results) ? results : [];
+    return Array.isArray(rows) ? rows : [];
   }
 
   /**
@@ -226,33 +229,25 @@ class ExportRepository {
    * @returns {Promise<object[]>} Baris agregat per kode UPT utama.
    */
   static async getUptBreakdown(filters = {}) {
-    const { whereStr, replacements } = this.buildWhereClause(filters);
+    const { conditions, replacements } = this.buildWhereClause(filters);
 
     const groupedCode = buildFullUptGroupByExpression(
       `TRIM(${TRANSACTION_UPT_CODE_COLUMN})`,
       replacements
     );
 
-    const sql = `
-      SELECT
-        ${groupedCode} AS kode_upt,
-        COALESCE(SUM(netto), 0) AS totalNettoKg,
-        COALESCE(SUM(nilai_rupiah), 0) AS totalNilaiRupiah,
-        COUNT(DISTINCT nomor_aju) AS totalDokumenAju
-      FROM tr_report_ekspor
-      ${whereStr}
-      GROUP BY ${groupedCode}
-      ORDER BY totalNilaiRupiah DESC
-    `;
-
-    const results = await db.query(sql, {
-      replacements,
-      replacements,
-      type: db.QueryTypes.SELECT,
+    const rows = await ReportEksport.findAll({
+      attributes: [
+        [literal(groupedCode), 'kode_upt'],
+        [literal('COALESCE(SUM(netto), 0)'), 'totalNettoKg'],
+        [literal('COALESCE(SUM(nilai_rupiah), 0)'), 'totalNilaiRupiah'],
+        [literal('COUNT(DISTINCT nomor_aju)'), 'totalDokumenAju'],
+      ],
+      ...whereOptions(conditions, replacements),
+      group: [literal(groupedCode)],
+      order: [[literal('totalNilaiRupiah'), 'DESC']],
       raw: true,
     });
-
-    const rows = Array.isArray(results) ? results : [];
 
     // Jaring pengaman: bila driver/MariaDB menolak `GROUP BY <expr>` yang
     // diulang, hasil yang terpecah tetap digabung di memori.
@@ -275,131 +270,107 @@ class ExportRepository {
    * @returns {Promise<object[]>} Baris `{ negara_tujuan, kel_ikan, value_usd }`.
    */
   static async getMatrixGranular(filters = {}) {
-    const { whereStr, replacements } = this.buildWhereClause(filters);
+    const { conditions, replacements } = this.buildWhereClause(filters);
 
-    const sql = `
-      SELECT
-        negara_tujuan,
-        kel_ikan,
-        COALESCE(
-          SUM(CASE WHEN kurs_usd IS NOT NULL AND kurs_usd > 0 THEN nilai_rupiah / kurs_usd ELSE 0 END),
-          0
-        ) AS value_usd
-      FROM tr_report_ekspor
-      ${whereStr}
-      GROUP BY negara_tujuan, kel_ikan
-    `;
-
-    const results = await db.query(sql, {
-      replacements,
-      replacements,
-      type: db.QueryTypes.SELECT,
+    const rows = await ReportEksport.findAll({
+      attributes: [
+        'negara_tujuan',
+        'kel_ikan',
+        [literal('COALESCE(SUM(CASE WHEN kurs_usd IS NOT NULL AND kurs_usd > 0 THEN nilai_rupiah / kurs_usd ELSE 0 END), 0)'), 'value_usd'],
+      ],
+      ...whereOptions(conditions, replacements),
+      group: ['negara_tujuan', 'kel_ikan'],
       raw: true,
     });
 
-    return Array.isArray(results) ? results : [];
+    return Array.isArray(rows) ? rows : [];
   }
 
   /**
    * Tren pergerakan bulanan.
    */
   static async getMonthlyTrends(filters = {}) {
-    const { whereStr, replacements } = this.buildWhereClause(filters);
+    const { conditions, replacements } = this.buildWhereClause(filters);
 
-    const sql = `
-      SELECT
-        bulan,
-        SUM(netto) AS totalNettoKg,
-        SUM(nilai_rupiah) AS totalNilaiRupiah,
-        COUNT(DISTINCT no_hc) AS totalDokumenHc
-      FROM tr_report_ekspor
-      ${whereStr}
-      GROUP BY bulan
-      ORDER BY MIN(tanggal_smkhp) ASC
-    `;
-
-    const results = await db.query(sql, {
-      replacements,
-      replacements,
-      type: db.QueryTypes.SELECT,
+    const rows = await ReportEksport.findAll({
+      attributes: [
+        'bulan',
+        [literal('SUM(netto)'), 'totalNettoKg'],
+        [literal('SUM(nilai_rupiah)'), 'totalNilaiRupiah'],
+        [literal('COUNT(DISTINCT no_hc)'), 'totalDokumenHc'],
+      ],
+      ...whereOptions(conditions, replacements),
+      group: ['bulan'],
+      order: [[literal('MIN(tanggal_smkhp)'), 'ASC']],
       raw: true,
     });
 
-    return results;
+    return rows;
   }
 
   /**
    * Negara tujuan ekspor terbesar.
    */
   static async getTopDestinations(filters = {}, limit = 5) {
-    const { whereStr, replacements } = this.buildWhereClause(filters);
+    const { conditions, replacements } = this.buildWhereClause(filters);
 
-    const sql = `
-      SELECT
-        kode_negara_partner,
-        negara_tujuan,
-        SUM(nilai_rupiah) AS totalNilaiRupiah,
-        SUM(netto) AS totalNettoKg
-      FROM tr_report_ekspor
-      ${whereStr}
-      GROUP BY kode_negara_partner, negara_tujuan
-      ORDER BY totalNilaiRupiah DESC
-      LIMIT :limit
-    `;
-
-    const results = await db.query(sql, {
-      replacements,
-      replacements: { ...replacements, limit: parseInt(limit, 10) },
-      type: db.QueryTypes.SELECT,
+    const rows = await ReportEksport.findAll({
+      attributes: [
+        'kode_negara_partner',
+        'negara_tujuan',
+        [literal('SUM(nilai_rupiah)'), 'totalNilaiRupiah'],
+        [literal('SUM(netto)'), 'totalNettoKg'],
+      ],
+      ...whereOptions(conditions, replacements),
+      group: ['kode_negara_partner', 'negara_tujuan'],
+      order: [[literal('totalNilaiRupiah'), 'DESC']],
+      limit: parseInt(limit, 10),
       raw: true,
     });
 
-    return results;
+    return rows;
   }
 
   /**
    * Analisis komoditas: rasio asal (tawar/laut), peruntukan (konsumsi), top kelompok ikan.
    */
   static async getCommodityAnalytics(filters = {}) {
-    const { whereStr, replacements } = this.buildWhereClause(filters);
+    const { conditions, replacements } = this.buildWhereClause(filters);
 
-    // Parallel queries
     const [rasioTawarLaut, rasioKonsumsi, topKomoditas] = await Promise.all([
       // a. Rasio Asal Komoditas (tawar_laut)
-      db.query(`
-        SELECT tawar_laut, SUM(netto) AS totalNettoKg
-        FROM tr_report_ekspor
-        ${whereStr}
-        GROUP BY tawar_laut
-      `, {
-        replacements,
-        type: db.QueryTypes.SELECT,
+      ReportEksport.findAll({
+        attributes: [
+          'tawar_laut',
+          [literal('SUM(netto)'), 'totalNettoKg'],
+        ],
+        ...whereOptions(conditions, { ...replacements }),
+        group: ['tawar_laut'],
         raw: true,
       }),
 
       // b. Rasio Peruntukan (konsumsi)
-      db.query(`
-        SELECT konsumsi, SUM(netto) AS totalNettoKg
-        FROM tr_report_ekspor
-        ${whereStr}
-        GROUP BY konsumsi
-      `, {
-        replacements,
-        type: db.QueryTypes.SELECT,
+      ReportEksport.findAll({
+        attributes: [
+          'konsumsi',
+          [literal('SUM(netto)'), 'totalNettoKg'],
+        ],
+        ...whereOptions(conditions, { ...replacements }),
+        group: ['konsumsi'],
         raw: true,
       }),
 
       // c. Top 5 Kelompok Ikan
-      db.query(`
-        SELECT kel_ikan, SUM(netto) AS totalNettoKg, SUM(nilai_rupiah) AS totalNilaiRupiah
-        FROM tr_report_ekspor
-        ${whereStr}
-        GROUP BY kel_ikan
-        ORDER BY totalNettoKg DESC
-        LIMIT 5
-      `, {
-        replacements,
-        type: db.QueryTypes.SELECT,
+      ReportEksport.findAll({
+        attributes: [
+          'kel_ikan',
+          [literal('SUM(netto)'), 'totalNettoKg'],
+          [literal('SUM(nilai_rupiah)'), 'totalNilaiRupiah'],
+        ],
+        ...whereOptions(conditions, { ...replacements }),
+        group: ['kel_ikan'],
+        order: [[literal('totalNettoKg'), 'DESC']],
+        limit: 5,
         raw: true,
       }),
     ]);
@@ -461,55 +432,49 @@ class ExportRepository {
    * - `COUNT` dipisahkan dari query data, dijalankan paralel, dan di-cache TTL.
    */
   static async getTransactions(filters, { page = 1, limit = 10, search = '' } = {}) {
-    const { whereStr, replacements } = this.buildWhereClause(filters);
+    const { conditions, replacements } = this.buildWhereClause(filters);
 
     // Search condition.
     // Mencakup eksportir/UPI serta komoditas ikan, sesuai placeholder pada
     // kolom pencarian di UI ("Cari eksportir atau komoditas ikan...").
-    let finalWhere = whereStr;
     if (search && String(search).trim() !== '') {
       const likeSearch = `%${String(search).trim()}%`;
       replacements.search = likeSearch;
-      finalWhere += `${finalWhere ? ' AND' : 'WHERE'} ((nomor_aju LIKE :search) OR (no_hc LIKE :search)` +
+      conditions.push(
+        '((nomor_aju LIKE :search) OR (no_hc LIKE :search)' +
         ' OR (nama_upi LIKE :search) OR (nama_trader LIKE :search)' +
-        ' OR (kel_ikan LIKE :search) OR (nm_dagang LIKE :search) OR (nm_latin LIKE :search))';
+        ' OR (kel_ikan LIKE :search) OR (nm_dagang LIKE :search) OR (nm_latin LIKE :search))'
+      );
     }
 
     const offset = (page - 1) * limit;
 
     // Kunci cache mengikuti kombinasi filter (tanpa paginasi, karena total tidak
     // berubah saat berpindah halaman).
-    const countCacheKey = finalWhere + '|' + JSON.stringify(replacements);
+    const countCacheKey = conditions.join(' AND ') + '|' + JSON.stringify(replacements);
     const cachedTotal = ExportRepository.#readCountCache(countCacheKey);
 
     /** Query total record; dilewati sepenuhnya bila cache masih berlaku. */
     const countPromise = cachedTotal !== null
       ? Promise.resolve(cachedTotal)
-      : db
-          .query(`SELECT COUNT(DISTINCT nomor_aju) AS total FROM tr_report_ekspor ${finalWhere}`, {
-            replacements,
-            type: db.QueryTypes.SELECT,
-            raw: true,
-          })
-          .then((rows) => {
-            const total = Number((Array.isArray(rows) && rows[0]?.total) || 0);
-            ExportRepository.#writeCountCache(countCacheKey, total);
-            return total;
-          });
+      : ReportEksport.findAll({
+          attributes: [[literal('COUNT(DISTINCT nomor_aju)'), 'total']],
+          ...whereOptions(conditions, replacements),
+          raw: true,
+        }).then((rows) => {
+          const total = Number((Array.isArray(rows) && rows[0]?.total) || 0);
+          ExportRepository.#writeCountCache(countCacheKey, total);
+          return total;
+        });
 
     // Query data: tanpa DISTINCT, urutan deterministik, memanfaatkan indeks.
-    const dataPromise = db.query(
-      `SELECT *
-       FROM tr_report_ekspor
-       ${finalWhere}
-       ORDER BY tanggal_smkhp DESC, nomor_aju DESC
-       LIMIT :limit OFFSET :offset`,
-      {
-        replacements: { ...replacements, limit, offset },
-        type: db.QueryTypes.SELECT,
-        raw: true,
-      },
-    );
+    const dataPromise = ReportEksport.findAll({
+      ...whereOptions(conditions, replacements),
+      order: [['tanggal_smkhp', 'DESC'], ['nomor_aju', 'DESC']],
+      limit,
+      offset,
+      raw: true,
+    });
 
     // Kedua query dijalankan bersamaan agar latensi = query terlama, bukan jumlahnya.
     const [total, dataResults] = await Promise.all([countPromise, dataPromise]);

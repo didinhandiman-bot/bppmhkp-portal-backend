@@ -1,30 +1,36 @@
+import { literal } from 'sequelize';
+import { ReportEksport } from '../models/index.js';
 import DashboardAnalyticsRepository from './dashboardAnalyticsRepository.js';
 import ExportRepository from './smkhpRepository.js';
-import { QueryTypes } from 'sequelize';
-import { dbReport } from '../config/database.js';
-
-const TABEL = 'tr_report_ekspor';
-
-function buildWhere({ startDate, endDate, uptId }, r) {
-  const { whereStr, replacements } = ExportRepository.buildWhereClause({ startDate, endDate, kd_upt: uptId });
-  Object.assign(r, replacements);
-  return whereStr;
-}
 
 class EksporRepository {
+  /**
+   * Agregat ringkasan ekspor untuk dashboard overview.
+   *
+   * Model-First Standard: dibaca lewat `ReportEksport.findAll` dengan atribut
+   * `[literal(...), alias]` + `raw: true`. Kondisi filter berasal dari
+   * `ExportRepository.buildWhereClause()` (tanpa kata kunci `WHERE`), sehingga
+   * logika UPT/tanggal tetap identik dengan modul SMKHP.
+   */
   static async getAggregatedSummary({ startDate, endDate, uptId } = {}) {
-    const r = {};
-    const where = buildWhere({ startDate, endDate, uptId }, r);
-    const rows = await dbReport.query(
-      `SELECT
-         COUNT(*) AS totalFrekuensi,
-         COUNT(DISTINCT nomor_aju) AS totalPengajuan,
-         SUM(COALESCE(netto, 0)) AS totalVolumeKg,
-         SUM(COALESCE(nilai_rupiah, 0)) AS totalNilaiRupiah
-       FROM ${TABEL}
-       ${where}`,
-      { replacements: r, type: QueryTypes.SELECT }
-    );
+    const { conditions, replacements } = ExportRepository.buildWhereClause({
+      startDate,
+      endDate,
+      kd_upt: uptId,
+    });
+
+    const rows = await ReportEksport.findAll({
+      attributes: [
+        [literal('COUNT(*)'), 'totalFrekuensi'],
+        [literal('COUNT(DISTINCT nomor_aju)'), 'totalPengajuan'],
+        [literal('SUM(COALESCE(netto, 0))'), 'totalVolumeKg'],
+        [literal('SUM(COALESCE(nilai_rupiah, 0))'), 'totalNilaiRupiah'],
+      ],
+      ...(conditions.length ? { where: literal(conditions.join(' AND ')) } : {}),
+      replacements,
+      raw: true,
+    });
+
     const row = rows[0] ?? {};
     const totalVolumeKg = Number(row.totalVolumeKg ?? 0);
     return {
