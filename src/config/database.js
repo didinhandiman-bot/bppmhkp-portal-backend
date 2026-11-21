@@ -144,6 +144,27 @@ export const dbHaccp = new Sequelize(
   }
 );
 
+/**
+ * Koneksi ketujuh: `report_spdi` (data SPDI Pascapanen).
+ *
+ * Berisi `tb_spdi_pasca`. Sama seperti `report_skp`, skemanya masih satu host
+ * dengan blok `report_*` sehingga kredensial diwarisi dari `DB_REPORT_*` dan
+ * bisa di-override lewat `DB_SPDI_*` bila nanti dipisah. Tidak ada nilai yang
+ * di-hardcode di sini. JANGAN menulis JOIN lintas-koneksi dari skema ini.
+ */
+export const dbReportSpdi = new Sequelize(
+  process.env.DB_SPDI_NAME || 'report_spdi',
+  process.env.DB_SPDI_USER || process.env.DB_REPORT_USER,
+  process.env.DB_SPDI_PASS || process.env.DB_REPORT_PASS,
+  {
+    host: process.env.DB_SPDI_HOST || process.env.DB_REPORT_HOST,
+    port: Number(process.env.DB_SPDI_PORT) || Number(process.env.DB_REPORT_PORT) || 3306,
+    dialect: 'mysql',
+    logging: false,
+    pool: { max: 10, min: 2, acquire: 30000, idle: 10000 }
+  }
+);
+
 export const testConnections = async () => {
   try {
     await dbMaster.authenticate();
@@ -208,6 +229,18 @@ export const testConnections = async () => {
       '⚠️  Gagal terkoneksi ke dbHaccp (haccp):',
       error.parent?.code || error.message,
       '— butuh GRANT untuk user aplikasi pada skema haccp.'
+    );
+  }
+
+  // spdi pascapanen
+  try {
+    await dbReportSpdi.authenticate();
+    console.log('✅ Koneksi ke dbReportSpdi (report_spdi) berhasil.');
+  } catch (error) {
+    console.error(
+      '⚠️  Gagal terkoneksi ke dbReportSpdi (report_spdi):',
+      error.parent?.code || error.message,
+      '— butuh GRANT untuk user aplikasi pada skema report_spdi.'
     );
   }
   

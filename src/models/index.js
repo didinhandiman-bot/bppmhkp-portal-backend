@@ -1,4 +1,4 @@
-import { dbReport, dbMaster, dbKapal, dbReportSkp, dbHaccp, dbPrimer } from '../config/database.js';
+import { dbReport, dbMaster, dbKapal, dbReportSkp, dbHaccp, dbPrimer, dbReportSpdi } from '../config/database.js';
 import initReportEksport from './ReportEksport.js';
 import initTbRUpt from './TbRUpt.js';
 import initTbKota from './TbKota.js';
@@ -6,6 +6,7 @@ import initCbibKapal from './CbibKapal.js';
 import initTbSkpPaska from './TbSkpPaska.js';
 import initVw07Sertifikasi from './Vw07Sertifikasi.js';
 import initTrLaporanPrimerExport from './TrLaporanPrimerExport.js';
+import initTbSpdiPasca from './report_spdi/tbSpdiPasca.model.js';
 import initTbUser from './TbUser.js';
 import initTbRole from './TbRole.js';
 
@@ -16,6 +17,7 @@ const CbibKapal = initCbibKapal(dbKapal);
 const TbSkpPaska = initTbSkpPaska(dbReportSkp);
 const Vw07Sertifikasi = initVw07Sertifikasi(dbHaccp);
 const TrLaporanPrimerExport = initTrLaporanPrimerExport(dbPrimer);
+const TbSpdiPasca = initTbSpdiPasca(dbReportSpdi);
 const TbUser = initTbUser(dbMaster);
 const TbRole = initTbRole(dbMaster);
 
@@ -40,6 +42,7 @@ export {
   dbReportSkp,
   dbHaccp,
   dbPrimer,
+  dbReportSpdi,
   ReportEksport,
   TbRUpt,
   TbKota,
@@ -47,6 +50,7 @@ export {
   TbSkpPaska,
   Vw07Sertifikasi,
   TrLaporanPrimerExport,
+  TbSpdiPasca,
   TbUser,
   TbRole
 };
@@ -59,6 +63,7 @@ export default {
   dbReportSkp,
   dbHaccp,
   dbPrimer,
+  dbReportSpdi,
   ReportEksport,
   TbRUpt,
   TbKota,
@@ -66,6 +71,7 @@ export default {
   TbSkpPaska,
   Vw07Sertifikasi,
   TrLaporanPrimerExport,
+  TbSpdiPasca,
   TbUser,
   TbRole
 };

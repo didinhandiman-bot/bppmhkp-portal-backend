@@ -1,10 +1,10 @@
 import DashboardAnalyticsRepository from './dashboardAnalyticsRepository.js';
-const SOURCES = ['ekspor', 'skp', 'haccp'];
+const SOURCES = ['ekspor', 'skp', 'haccp', 'spdi'];
 export default class PascaPanenRepository {
   static async getAggregatedSummary(filters = {}) {
-    const [smkhpRows, skpRows, haccpRows] = await Promise.all(SOURCES.map(source => DashboardAnalyticsRepository.read(source, 'summary', filters)));
-    const smkhp = Number(smkhpRows[0]?.total || 0), skp = Number(skpRows[0]?.total || 0), haccp = Number(haccpRows[0]?.total || 0);
-    return { totalSertifikatTerbit: smkhp + skp + haccp, smkhp: {total:smkhp}, skp:{total:skp, berlaku:Number(skpRows[0]?.berlaku || 0)}, haccp:{total:haccp, berlaku:Number(haccpRows[0]?.berlaku || 0)}, totalPending:0, totalInProgress:0 };
+    const [smkhpRows, skpRows, haccpRows, spdiRows] = await Promise.all(SOURCES.map(source => DashboardAnalyticsRepository.read(source, 'summary', filters)));
+    const smkhp = Number(smkhpRows[0]?.total || 0), skp = Number(skpRows[0]?.total || 0), haccp = Number(haccpRows[0]?.total || 0), spdi = Number(spdiRows[0]?.total || 0);
+    return { totalSertifikatTerbit: smkhp + skp + haccp + spdi, smkhp: {total:smkhp}, skp:{total:skp, berlaku:Number(skpRows[0]?.berlaku || 0)}, haccp:{total:haccp, berlaku:Number(haccpRows[0]?.berlaku || 0)}, spdi: spdi, totalPending:0, totalInProgress:0 };
   }
   static async readAll(mode, filters) { return (await Promise.all(SOURCES.map(source => DashboardAnalyticsRepository.read(source, mode, filters)))).flat(); }
   static getMonthlyTrends(filters = {}) { return this.readAll('monthly', filters); }

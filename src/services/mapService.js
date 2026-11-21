@@ -10,7 +10,7 @@ import {
 /**
  * Service peta sebaran penerbitan sertifikasi.
  *
- * Tugasnya menyatukan data dari empat schema menjadi satu payload per
+ * Tugasnya menyatukan data dari lima schema menjadi satu payload per
  * provinsi. Penggabungan dilakukan IN-MEMORY lewat `Map` ber-key kode provinsi
  * 2 digit, bukan lewat JOIN lintas-database (yang dilarang oleh aturan
  * dual-database di proyek ini).
@@ -19,11 +19,12 @@ import {
  * `38-Provinsi-Indonesia.json` milik frontend, sehingga peta bisa memasangkan
  * nilai cukup dengan `kodeProvinsi`.
  *
- * Empat sumber data dan cara membaca provinsinya:
+ * Lima sumber data dan cara membaca provinsinya:
  * - Primer  : `uraian_propinsi` (nama)  -> `provinceCodeFromName`.
  * - Kapal   : `kode_provinsi` (BPS)     -> `normalizeProvinceCode`.
  * - SKP     : `provinsi_id` (BPS)       -> `normalizeProvinceCode`, fallback nama.
  * - HACCP   : `nm_provinsi` (nama)      -> `provinceCodeFromName`.
+ * - SPDI    : `kd_provinsi` (BPS)       -> `normalizeProvinceCode`, fallback nama.
  */
 
 /** Tahun terendah yang dianggap valid untuk parameter `tahun`. */
@@ -96,6 +97,7 @@ function createEmptyEntry(kodeProvinsi) {
     },
     pascaPanen: {
       skp: 0,
+      spdi: 0,
       haccp: {
         gradeA: 0,
         gradeB: 0,
@@ -132,9 +134,9 @@ class MapService {
   /**
    * Mengambil payload sebaran penerbitan sertifikasi per provinsi.
    *
-   * Keempat sumber dibaca paralel (`Promise.all`) karena saling bebas dan
+   * Kelima sumber dibaca paralel (`Promise.all`) karena saling bebas dan
    * masing-masing `GROUP BY` provinsi, jadi wall-clock-nya satu putaran
-   * query, bukan empat.
+   * query, bukan lima.
    *
    * @param {unknown} tahun Tahun laporan (opsional, default tahun berjalan).
    * @returns {Promise<Array<object>>} Array 38 provinsi siap dipetakan ke GeoJSON.
@@ -144,11 +146,12 @@ class MapService {
     const startDate = `${year}-01-01 00:00:00`;
     const endDate = `${year}-12-31 23:59:59`;
 
-    const [primerRows, kapalRows, skpRows, haccpRows] = await Promise.all([
+    const [primerRows, kapalRows, skpRows, haccpRows, spdiRows] = await Promise.all([
       MapRepository.getPrimerByProvince(startDate, endDate),
       MapRepository.getKapalByProvince(startDate, endDate),
       MapRepository.getSkpByProvince(startDate, endDate),
       MapRepository.getHaccpByProvince(startDate, endDate),
+      MapRepository.getSpdiByProvince(startDate, endDate),
     ]);
 
     const provinces = buildProvinceMap();
@@ -194,6 +197,16 @@ class MapService {
       entry.pascaPanen.haccp.gradeB += row.gradeB;
       entry.pascaPanen.haccp.gradeC += row.gradeC;
       entry.pascaPanen.jumlahUpi += row.jumlahUpi;
+    }
+
+    // SPDI: `kd_provinsi` sudah kode BPS; nama dipakai sebagai cadangan.
+    for (const row of spdiRows) {
+      const code =
+        normalizeProvinceCode(row.kd_provinsi) ?? provinceCodeFromName(row.provinsi);
+      const entry = code ? provinces.get(code) : undefined;
+      if (entry) {
+        entry.pascaPanen.spdi += row.total;
+      }
     }
 
     return [...provinces.values()];

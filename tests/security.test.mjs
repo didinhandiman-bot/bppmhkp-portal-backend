@@ -16,7 +16,7 @@ registerHooks({ load(url, context, nextLoad) {
     import { Sequelize } from 'sequelize';
     const capture = async (sql, options) => { globalThis.securityQueries.push({sql, options}); if(sql.includes('hc.tb_kota')) return [{KODE_KOTA:'3101',KODE_UPT:'15.0'},{KODE_KOTA:'3102',KODE_UPT:'47.0'}]; return []; };
     const make = () => { const s = new Sequelize({ dialect: 'mysql', logging: false }); s.query = capture; return s; };
-    export const dbMaster=make(), dbReport=make(), dbReportSkp=make(), dbPrimer=make(), dbKapal=make(), dbHaccp=make(), dbMutu=make();
+    export const dbMaster=make(), dbReport=make(), dbReportSkp=make(), dbPrimer=make(), dbKapal=make(), dbHaccp=make(), dbMutu=make(), dbReportSpdi=make();
   ` };
   return nextLoad(url, context);
 }});
@@ -35,6 +35,17 @@ globalThis.securityQueries.length=0;
 const SkpService = (await import('../src/services/skpService.js')).default;
 await SkpService.getSummaryMetrics(scoped); await SkpService.getMonthlyTrends(scoped); await SkpService.getDistribution(scoped); await SkpService.getTableList(scoped);
 for(const q of globalThis.securityQueries){assert.match(q.sql,/kd_unit = :kdUnit/);assert.equal(q.options.replacements.kdUnit,'15.0');}
+globalThis.securityQueries.length=0;
+const SpdiPascaService = (await import('../src/services/spdiPasca.service.js')).default;
+await SpdiPascaService.getDashboardData(scoped); await SpdiPascaService.getUnitList(scoped);
+const spdiQueries=globalThis.securityQueries.filter(q=>q.sql.includes('tb_spdi_pasca'));
+assert.ok(spdiQueries.length>=6);
+for(const q of spdiQueries){
+ assert.match(q.sql,/TRIM\(kd_upt\) IN/);
+ assert.ok(Object.values(q.options.replacements).includes('15.0'));
+ assert.ok(!Object.values(q.options.replacements).includes('47.0'));
+ assert.doesNotMatch(q.sql,/FROM\s+\S+\s+\w+\s+JOIN\s/i);
+}
 const ExportRepository = (await import('../src/repositories/smkhpRepository.js')).default;
 const filter=ExportRepository.buildWhereClause(scoped); assert.match(filter.whereStr,/kode_upt IN/); assert.ok(Object.values(filter.replacements).includes('15.0')); assert.ok(!Object.values(filter.replacements).includes('47.0'));
 await ExportRepository.getUpts(scoped); assert.match(globalThis.securityQueries.at(-1).sql,/kode_upt IN/);
@@ -63,6 +74,20 @@ try {
   assert.equal((await fetch(base+prefix+route,{headers:{Authorization:'Bearer invalid'}})).status,403);
   const token=jwt.sign(limited,process.env.JWT_SECRET);
   assert.equal((await fetch(base+prefix+route+'?kd_unit=47.0&id_upt=47.0',{headers:{Authorization:'Bearer '+token}})).status,200);
+ }
+ for(const prefix of ['/api/v1/pascapanen/spdi','/api/pascapanen/spdi']) for(const route of ['/dashboard','/list']) {
+  assert.equal((await fetch(base+prefix+route)).status,401);
+  assert.equal((await fetch(base+prefix+route,{headers:{Authorization:'Bearer invalid'}})).status,403);
+  const token=jwt.sign(limited,process.env.JWT_SECRET);
+  globalThis.securityQueries.length=0;
+  assert.equal((await fetch(base+prefix+route+'?kd_upt=47.0&search=a',{headers:{Authorization:'Bearer '+token}})).status,200);
+  const spdiHttp=globalThis.securityQueries.filter(q=>q.sql.includes('tb_spdi_pasca'));
+  assert.ok(spdiHttp.length>0);
+  for(const q of spdiHttp){
+   assert.match(q.sql,/TRIM\(kd_upt\) IN/);
+   assert.ok(Object.values(q.options.replacements).includes('15.0'));
+   assert.ok(!Object.values(q.options.replacements).includes('47.0'));
+  }
  }
  const token=jwt.sign(limited,process.env.JWT_SECRET);
  for(const path of ['/api/v1/primer/overview','/api/v1/primer/certificates','/api/v1/primer/export','/api/v1/dashboard/overview']) {

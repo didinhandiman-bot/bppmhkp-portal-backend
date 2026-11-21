@@ -26,7 +26,7 @@ registerHooks({load(url,c,next){
  if(url.endsWith('/src/config/database.js'))return {format:'module',shortCircuit:true,source:`
    import { Sequelize } from 'sequelize';
    const make = () => { const s = new Sequelize({ dialect: 'mysql', logging: false }); s.query = globalThis.dashboardQuery; return s; };
-   export const dbReport=make(), dbMaster=make(), dbReportSkp=make(), dbHaccp=make(), dbPrimer=make(), dbKapal=make(), dbMutu=make();
+   export const dbReport=make(), dbMaster=make(), dbReportSkp=make(), dbHaccp=make(), dbPrimer=make(), dbKapal=make(), dbMutu=make(), dbReportSpdi=make();
  `};
  return next(url,c);
 }});
@@ -36,13 +36,15 @@ const DashboardService=(await import('../src/services/dashboardOverviewService.j
 const PrimerRepository=(await import('../src/repositories/primerRepository.js')).default;
 await assert.rejects(PrimerRepository.getAggregatedSummary({uptId:'15.0'}),/Scope kota wajib/);
 const data=await DashboardService.getOverviewMetrics({uptId:'15.0',startDate:'2025-01-01',endDate:'2026-12-31'});
-assert.deepEqual(data.monthlyTrends,[{month:'2025-01',ekspor:2,pascaPanen:6,primer:2},{month:'2026-01',ekspor:3,pascaPanen:9,primer:3}]);
-// SKP tidak punya kolom UPT → distribution SKP dikosongkan. pascaPanen = ekspor(5) + haccp(5) = 10
-assert.deepEqual(data.uptDistribution,[{namaUpt:'Jakarta',ekspor:5,pascaPanen:10,primer:5,grandTotal:20}]);
-assert.equal(data.recentActivities.length,4); // SMKHP feed dua pilar dideduplikasi.
-assert.equal(new Set(data.recentActivities.map(x=>x.id)).size,4);
+assert.deepEqual(data.monthlyTrends,[{month:'2025-01',ekspor:2,pascaPanen:8,primer:2},{month:'2026-01',ekspor:3,pascaPanen:12,primer:3}]);
+// SKP tidak punya kolom UPT → distribution SKP dikosongkan. pascaPanen = ekspor(5) + haccp(5) + spdi(5) = 15
+assert.deepEqual(data.uptDistribution,[{namaUpt:'Jakarta',ekspor:5,pascaPanen:15,primer:5,grandTotal:25}]);
+assert.equal(data.recentActivities.length,5); // SMKHP feed dua pilar dideduplikasi; SPDI feed terpisah.
+assert.equal(new Set(data.recentActivities.map(x=>x.id)).size,5);
 assert.equal(data.summaryKpi.primer.totalSertifikat,5);
-assert.equal(data.summaryKpi.totalSertifikasiNasional,20);
+assert.equal(data.summaryKpi.pascaPanen.spdi,5);
+assert.equal(data.summaryKpi.pascaPanen.totalSertifikatTerbit,20);
+assert.equal(data.summaryKpi.totalSertifikasiNasional,25);
 assert.equal(data.scope.kapalIncluded,false);
 assert.ok(!globalThis.dashboardQueries.some(q=>q.sql.includes('tb_cbib_kapal')));
 for(const q of globalThis.dashboardQueries){

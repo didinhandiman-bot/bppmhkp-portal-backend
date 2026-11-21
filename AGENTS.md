@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Express 5 + Sequelize 6 API (ESM, `"type": "module"`) behind the BPPMHKP fish-export
-dashboard. Reads seven MySQL schemas and serves analytics + JWT auth.
+dashboard. Reads eight MySQL schemas and serves analytics + JWT auth.
 
 No git repo, no linter, no test runner, no CI, no README. `package.json` includes `start`, `dev` and three regression-test scripts.
 
@@ -40,10 +40,10 @@ not exist.
 1. **Strict Model Layering**:
    - Repository **WAJIB** berinteraksi dengan data melalui Sequelize Models yang terdaftar dan diekspor dari `src/models/index.js`.
    - **Dilarang keras membypass Model**: Jangan melakukan query string mentah langsung pada koneksi DB (`db.query`) atau mendefinisikan kamus nama tabel string manual di dalam Repository.
-   - Semua entitas database/skema (ekspor, skp, haccp, primer, kapal, master) **WAJIB** memiliki definisi model Sequelize di `src/models/`.
+   - Semua entitas database/skema (ekspor, skp, haccp, primer, kapal, master, spdi) **WAJIB** memiliki definisi model Sequelize di `src/models/`.
 
 2. **Model Definition Requirements**:
-   - Setiap model harus diikat (*bound*) ke instance koneksi Sequelize yang sesuai dari `src/config/database.js` (`dbMaster`, `dbReport`, `dbReportSkp`, `dbHaccp`, `dbPrimer`, `dbKapal`, `dbMutu`).
+   - Setiap model harus diikat (*bound*) ke instance koneksi Sequelize yang sesuai dari `src/config/database.js` (`dbMaster`, `dbReport`, `dbReportSkp`, `dbHaccp`, `dbPrimer`, `dbKapal`, `dbMutu`, `dbReportSpdi`).
    - Karena tabel dan view legacy tidak dikelola via migrasi Sequelize, semua model wajib mengonfigurasi opsi:
      ```javascript
      {
@@ -51,6 +51,10 @@ not exist.
        freezeTableName: true
      }
      ```
+   - Pengecualian: `models/report_spdi/tbSpdiPasca.model.js` memakai
+     `timestamps: true` dengan `createdAt: 'created_at'` / `updatedAt: 'updated_at'`
+     karena tabel `tb_spdi_pasca` memang punya kedua kolom itu dan model diikat ke
+     `dbReportSpdi`.
    - Untuk tabel atau view yang tidak memiliki kolom `id` standar (misal view SQL `vw07_sertifikasi` atau tabel audit), tentukan `primaryKey: true` secara eksplisit pada atribut identifier unik dokumen/registrasi agar Sequelize dapat menjalankan agregasi dan query tanpa error.
 
 3. **Handling Aggregations & Calculations**:
@@ -126,7 +130,7 @@ router. `npm run dev` (nodemon) avoids this.
 
 ## Database connections
 
-`src/config/database.js` creates seven independent Sequelize instances:
+`src/config/database.js` creates eight independent Sequelize instances:
 
 | Export | Schema | Contents |
 |---|---|---|
@@ -137,6 +141,7 @@ router. `npm run dev` (nodemon) avoids this.
 | `dbMutu` | `mutu` | data master perizinan |
 | `dbKapal` | `report_kapal` | `tb_cbib_kapal` |
 | `dbHaccp` | `report_haccp` | `vw07_sertifikasi` |
+| `dbReportSpdi` | `report_spdi` | `tb_spdi_pasca` |
 
 All point at the same host today but are treated as separate servers. **Never write a
 cross-database JOIN.** `hc.tb_r_upt` is read into an in-memory `Map`, then merged with
@@ -266,6 +271,8 @@ Prefixes are declared once in `src/routes/index.js`, all under the single
 - `/api/v1/pascapanen/smkhp` — `kpi-summary`, `monthly-trends`, `top-destinations`,
   `commodity-analytics`, `upts`, `upt-breakdown`, `top-products-by-destination`,
   `top-destinations-by-product`, `transactions`
+- `/api/v1/pascapanen/spdi` — `dashboard`, `list`, protected by JWT + `allowRoles([1, 2])`.
+  `/api/pascapanen/spdi` remains a protected compatibility alias (same pattern as haccp).
 - `/api/v1/skp` — `summary`, `trends`, `distribution`, `list`
 - `/api/v1/primer` — `overview`, `certificates`, `export`
 - `/api/v1/pasca-panen/haccp` — `kpi`, `charts`, `table`, all protected by JWT.

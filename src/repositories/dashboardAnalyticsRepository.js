@@ -6,6 +6,7 @@ import {
   Vw07Sertifikasi,
   TrLaporanPrimerExport,
   CbibKapal,
+  TbSpdiPasca,
 } from '../models/index.js';
 import { buildInClause, expandUptCodeFilter } from '../utils/uptCode.js';
 import { AppError } from '../errors/appError.js';
@@ -36,6 +37,10 @@ const SOURCES = {
   // upt_inspeksi adalah nama UPT (string), kd_upt adalah kode UPT (15.0, 01.0, dll).
   // Pakai kd_upt untuk GROUP BY & filter WHERE. Alias ekspansi didukung via expandUptCodeFilter.
   kapal: { model: CbibKapal, date: 'tgl_terbit', unit: 'kd_upt', whereUnit: 'kd_upt = :upt', id: 'no_cbib', applicant: 'nama_pemilik', module: 'Primer', service: 'CPIB Kapal', kapal: true },
+  // SPDI Pascapanen: hanya sertifikat yang sudah terbit (tgl_terbit NOT NULL)
+  // yang dihitung. kd_upt memakai alias ekspansi UPT yang sama dengan ekspor
+  // agar 01.00/01.0/15.0 tidak muncul sebagai unit berbeda.
+  spdi: { model: TbSpdiPasca, date: 'tgl_terbit', unit: 'kd_upt', id: 'nomor_sertifikat', applicant: 'nama_unit', module: 'Pasca Panen', service: 'SPDI', spdi: true, aliases: true },
 };
 
 /**
@@ -61,6 +66,9 @@ const SOURCES = {
  */
 function whereFor(source, filters, replacements) {
   const conditions = [];
+  // SPDI hanya menghitung sertifikat yang sudah terbit, termasuk pada mode
+  // summary/distribution (bukan hanya monthly/activities).
+  if (source.spdi) conditions.push(source.date + ' IS NOT NULL');
   if (filters.startDate) {
     conditions.push(source.date + ' >= :startDate');
     replacements.startDate = filters.startDate;
@@ -124,7 +132,7 @@ export default class DashboardAnalyticsRepository {
   /**
    * Menjalankan satu mode agregasi untuk satu sumber.
    *
-   * @param {'ekspor'|'skp'|'haccp'|'primer'|'kapal'} sourceName Kunci `SOURCES`.
+   * @param {'ekspor'|'skp'|'haccp'|'primer'|'kapal'|'spdi'} sourceName Kunci `SOURCES`.
    * @param {'monthly'|'distribution'|'activities'|'summary'} mode Mode pembacaan.
    * @param {Object} filters Filter tanggal/UPT/scope kota.
    * @returns {Promise<Array<Object>>} Baris mentah yang sudah diberi

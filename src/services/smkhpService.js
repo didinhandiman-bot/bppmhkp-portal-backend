@@ -3,6 +3,16 @@ import UptMasterService from './uptMasterService.js';
 import { TRANSACTION_UPT_CODE_COLUMN, TRANSACTION_UPT_NAME_COLUMN } from '../utils/uptCode.js';
 
 class ExportService {
+  /** Membulatkan angka ke 2 tempat desimal secara aman. */
+  static #round2(value) {
+    const num = Number(value) || 0;
+    return Math.round(num * 100) / 100;
+  }
+
+  /** Mengonversi satuan kilogram menjadi ton (dibulatkan 2 desimal). */
+  static #kgToTon(kg) {
+    return ExportService.#round2((Number(kg) || 0) / 1000);
+  }
 
   /**
    * Menggeser tanggal (YYYY-MM-DD) sebanyak `deltaTahun` tahun.
@@ -33,9 +43,7 @@ class ExportService {
 
   /**
    * Mengambil data KPI periode pembanding (1 tahun sebelumnya) untuk kalkulasi YoY.
-   *
-   * Mengembalikan juga `totalNilaiRupiah` agar badge hero memakai pemindaian
-   * tabel yang sama, bukan query terpisah.
+   * Basis metrik dokumen memakai `totalDokumenAju` (COUNT DISTINCT nomor_aju).
    *
    * @param {Object} filters Filter aktif (harus memuat startDate & endDate).
    * @returns {Promise<Object>} Row aggregate KPI periode sebelumnya.
@@ -46,7 +54,7 @@ class ExportService {
     const emptyPeriod = {
       totalNilaiRupiah: 0,
       totalNettoKg: 0,
-      totalSertifikatHc: 0,
+      totalDokumenAju: 0,
       totalTraderAktif: 0,
       totalNegaraTujuan: 0,
     };
@@ -71,7 +79,7 @@ class ExportService {
     return {
       totalNilaiRupiah: Number(row?.totalNilaiRupiah) || 0,
       totalNettoKg: Number(row?.totalNettoKg) || 0,
-      totalSertifikatHc: Number(row?.totalSertifikatHc) || 0,
+      totalDokumenAju: Number(row?.totalDokumenAju) || 0,
       totalTraderAktif: Number(row?.totalTraderAktif) || 0,
       totalNegaraTujuan: Number(row?.totalNegaraTujuan) || 0,
     };
@@ -80,7 +88,7 @@ class ExportService {
   /**
    * Menghitung persentase YoY secara aman (menghindari pembagian nol).
    *
-   * Pembanding nol tidak dapat dihitung sebagai rasio, sehingga adopts
+   * Pembanding nol tidak dapat dihitung sebagai rasio, sehingga mengadopsi
    * +100% bila periode aktif sudah berisi data (pertumbuhan dari nol) dan
    * 0% bila keduanya kosong. Hasilnya dibulatkan 2 desimal.
    *
@@ -92,11 +100,14 @@ class ExportService {
     if (previous === 0) {
       return current > 0 ? 100 : 0;
     }
-    return Math.round(((current - previous) / previous) * 10000) / 100;
+    return ExportService.#round2(((current - previous) / previous) * 100);
   }
 
   /**
    * Ambil KPI Summary dari repository + kalkulasi tambahan (termasuk YoY).
+   *
+   * Metrik jumlah dokumen memakai basis unik `nomor_aju` (`totalDokumenAju`)
+   * agar seragam dengan Dashboard Overview, Breakdown UPT, dan sistem legacy.
    */
   static async getKpiSummary(filters = {}) {
     const [data, previous] = await Promise.all([
@@ -104,48 +115,39 @@ class ExportService {
       ExportService.#getPreviousPeriodKpi(filters),
     ]);
 
-    // Kalkulasi tonase
-    const totalNettoTon = Math.round((data.totalNettoKg / 1000) * 100) / 100;
-    const prevTotalNettoTon = Math.round((previous.totalNettoKg / 1000) * 100) / 100;
+    const totalNettoTon = ExportService.#kgToTon(data.totalNettoKg);
+    const prevTotalNettoTon = ExportService.#kgToTon(previous.totalNettoKg);
 
-    // Year-over-Year nyata: bandingkan total nilai rentang aktif dengan rentang
-    // yang sama persis setahun sebelumnya. Bila pembanding nol, persentase = 0
-    // (sesuai semantik badge hero: tanpa basis pembanding tidak ada pertumbuhan).
     const currentTotal = Number(data.totalNilaiRupiah) || 0;
     const previousTotal = previous.totalNilaiRupiah;
     const percentage =
       previousTotal > 0
-        ? Math.round(((currentTotal - previousTotal) / previousTotal) * 10000) / 100
+        ? ExportService.#round2(((currentTotal - previousTotal) / previousTotal) * 100)
         : 0;
+
+    const totalDokumenAju = Number(data.totalDokumenAju) || 0;
+    const totalTraderAktif = Number(data.totalTraderAktif) || 0;
+    const totalNegaraTujuan = Number(data.totalNegaraTujuan) || 0;
 
     return {
       heroInsight: {
-        totalDevisaRupiah: data.totalNilaiRupiah,
-        totalDevisaUsd: data.totalNilaiUsd,
+        totalDevisaRupiah: currentTotal,
+        totalDevisaUsd: Number(data.totalNilaiUsd) || 0,
         percentage,
       },
       kpiCards: {
-        totalNettoKg: data.totalNettoKg,
-        totalNettoTon: totalNettoTon,
-        totalDokumenAju: data.totalDokumenAju,
-        totalSertifikatHc: data.totalSertifikatHc,
-        totalUpiAktif: data.totalUpiAktif,
-        totalTraderAktif: data.totalTraderAktif,
-        totalNegaraTujuan: data.totalNegaraTujuan,
+        totalNettoKg: Number(data.totalNettoKg) || 0,
+        totalNettoTon,
+        totalDokumenAju,
+        totalSertifikatHc: totalDokumenAju,
+        totalUpiAktif: Number(data.totalUpiAktif) || 0,
+        totalTraderAktif,
+        totalNegaraTujuan,
         yoy: {
           tonase: ExportService.#calcYoY(totalNettoTon, prevTotalNettoTon),
-          dokumenHc: ExportService.#calcYoY(
-            Number(data.totalSertifikatHc) || 0,
-            previous.totalSertifikatHc
-          ),
-          eksportirAktif: ExportService.#calcYoY(
-            Number(data.totalTraderAktif) || 0,
-            previous.totalTraderAktif
-          ),
-          negaraTujuan: ExportService.#calcYoY(
-            Number(data.totalNegaraTujuan) || 0,
-            previous.totalNegaraTujuan
-          ),
+          dokumenHc: ExportService.#calcYoY(totalDokumenAju, previous.totalDokumenAju),
+          eksportirAktif: ExportService.#calcYoY(totalTraderAktif, previous.totalTraderAktif),
+          negaraTujuan: ExportService.#calcYoY(totalNegaraTujuan, previous.totalNegaraTujuan),
         },
       },
     };
@@ -153,27 +155,14 @@ class ExportService {
 
   /**
    * Ambil daftar DISTINCT nama UPT dari tabel transaksi.
-   *
-   * Dipertahankan untuk frontend versi lama. Dropdown sebaiknya memakai
-   * `UptMasterService.getOptions()` karena hanya master `hc.tb_r_upt` yang
-   * memuat kode unit.
    */
   static async getUpts(filters = {}) {
     const rows = await ExportRepository.getUpts(filters);
-
     return rows.map((row) => ({ nama_upt: row.nama_upt }));
   }
 
   /**
-   * Rekap kontribusi tiap UPT, lengkap dengan nama dari master.
-   *
-   * Baris transaksi dibaca dari `report_siapmutu`, sedangkan nama UPT diambil
-   * dari `hc.tb_r_upt` lewat cache in-memory. Bucket `01.0`/`01.00` sudah
-   * digabung oleh repository menjadi satu baris `15.0`, sehingga rekap ini
-   * selalu mengembalikan satu entitas per UPT tanpa nama yang kembar.
-   *
-   * @param {Object} filters Filter aktif.
-   * @returns {Promise<object[]>} Daftar `{ kode_upt, nama_upt, … }`.
+   * Rekap kontribusi tiap UPT, lengkap dengan nama dari master `hc.tb_r_upt`.
    */
   static async getUptBreakdown(filters = {}) {
     const rows = await ExportRepository.getUptBreakdown(filters);
@@ -183,7 +172,7 @@ class ExportService {
       ...row,
       [TRANSACTION_UPT_NAME_COLUMN]:
         labels.get(row[TRANSACTION_UPT_CODE_COLUMN]) ?? row[TRANSACTION_UPT_NAME_COLUMN] ?? null,
-      totalNettoTon: Math.round(((Number(row.totalNettoKg) || 0) / 1000) * 100) / 100,
+      totalNettoTon: ExportService.#kgToTon(row.totalNettoKg),
     }));
   }
 
@@ -193,15 +182,13 @@ class ExportService {
   static async getMonthlyTrends(filters = {}) {
     const rawData = await ExportRepository.getMonthlyTrends(filters);
 
-    const result = rawData.map((row) => ({
+    return rawData.map((row) => ({
       bulan: row.bulan,
       totalNettoKg: Number(row.totalNettoKg) || 0,
-      totalNettoTon: Math.round(((Number(row.totalNettoKg) || 0) / 1000) * 100) / 100,
+      totalNettoTon: ExportService.#kgToTon(row.totalNettoKg),
       totalNilaiRupiah: Number(row.totalNilaiRupiah) || 0,
       totalDokumenHc: Number(row.totalDokumenHc) || 0,
     }));
-
-    return result;
   }
 
   /**
@@ -215,22 +202,21 @@ class ExportService {
       0
     );
 
-    const result = rawData.map((row) => {
+    return rawData.map((row) => {
+      const nilaiRupiah = Number(row.totalNilaiRupiah) || 0;
       const share =
         totalDevisaTop > 0
-          ? Math.round(((Number(row.totalNilaiRupiah) || 0) / totalDevisaTop) * 10000) / 100
+          ? ExportService.#round2((nilaiRupiah / totalDevisaTop) * 100)
           : 0;
 
       return {
         kode_negara_partner: row.kode_negara_partner,
         negara_tujuan: row.negara_tujuan,
-        totalNilaiRupiah: Number(row.totalNilaiRupiah) || 0,
+        totalNilaiRupiah: nilaiRupiah,
         totalNettoKg: Number(row.totalNettoKg) || 0,
         sharePersentase: share,
       };
     });
-
-    return result;
   }
 
   /**
@@ -239,26 +225,23 @@ class ExportService {
   static async getCommodityAnalytics(filters = {}) {
     const data = await ExportRepository.getCommodityAnalytics(filters);
 
+    const mapKategori = (rows, keyField) =>
+      Array.isArray(rows)
+        ? rows.map((r) => ({
+            kategori: r[keyField],
+            totalNettoKg: Number(r.totalNettoKg) || 0,
+            totalNettoTon: ExportService.#kgToTon(r.totalNettoKg),
+          }))
+        : [];
+
     return {
-      rasioTawarLaut: Array.isArray(data.rasioTawarLaut)
-        ? data.rasioTawarLaut.map((r) => ({
-            kategori: r.tawar_laut,
-            totalNettoKg: Number(r.totalNettoKg) || 0,
-            totalNettoTon: Math.round(((Number(r.totalNettoKg) || 0) / 1000) * 100) / 100,
-          }))
-        : [],
-      rasioKonsumsi: Array.isArray(data.rasioKonsumsi)
-        ? data.rasioKonsumsi.map((r) => ({
-            kategori: r.konsumsi,
-            totalNettoKg: Number(r.totalNettoKg) || 0,
-            totalNettoTon: Math.round(((Number(r.totalNettoKg) || 0) / 1000) * 100) / 100,
-          }))
-        : [],
+      rasioTawarLaut: mapKategori(data.rasioTawarLaut, 'tawar_laut'),
+      rasioKonsumsi: mapKategori(data.rasioKonsumsi, 'konsumsi'),
       topKomoditas: Array.isArray(data.topKomoditas)
         ? data.topKomoditas.map((r) => ({
             kel_ikan: r.kel_ikan,
             totalNettoKg: Number(r.totalNettoKg) || 0,
-            totalNettoTon: Math.round(((Number(r.totalNettoKg) || 0) / 1000) * 100) / 100,
+            totalNettoTon: ExportService.#kgToTon(r.totalNettoKg),
             totalNilaiRupiah: Number(r.totalNilaiRupiah) || 0,
           }))
         : [],
@@ -267,14 +250,11 @@ class ExportService {
 
   /**
    * Ambil daftar transaksi dengan paginasi.
-   *
-   * Setelah baris diambil dari `report_siapmutu`, `nama_upt` diganti dengan
-   * `NM_PENDEK_BARU` dari master `hc.tb_r_upt` berdasarkan `kode_upt`. Kode
-   * legacy `01.00`/`01.0` ikut dinormalkan menjadi `15.0`, dan baris yang
-   * kodenya tidak dikenal di master tetap memakai `nama_upt` dari transaksi.
    */
   static async getTransactions(filters, pagination = {}) {
-    const { page = 1, limit = 10, search = '' } = pagination;
+    const page = Number(pagination.page) || 1;
+    const limit = Number(pagination.limit) || 10;
+    const search = pagination.search ?? '';
 
     const result = await ExportRepository.getTransactions(filters, {
       page,
@@ -291,9 +271,9 @@ class ExportService {
       data,
       meta: {
         totalRecords,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(totalRecords / Number(limit)),
+        page,
+        limit,
+        totalPages: Math.ceil(totalRecords / limit),
       },
     };
   }

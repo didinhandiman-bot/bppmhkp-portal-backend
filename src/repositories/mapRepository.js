@@ -4,6 +4,7 @@ import {
   CbibKapal,
   TbSkpPaska,
   Vw07Sertifikasi,
+  TbSpdiPasca,
 } from '../models/index.js';
 
 /**
@@ -19,11 +20,12 @@ import {
  * (`Model.findAll`) dengan agregasi `sequelize.literal()` (Model-First
  * Standard). Tidak ada lagi `db.query(...)` / `QueryTypes.SELECT` maupun
  * string nama tabel manual — model yang dipakai adalah `TrLaporanPrimerExport`,
- * `CbibKapal`, `TbSkpPaska`, dan `Vw07Sertifikasi` dari `../models/index.js`.
+ * `CbibKapal`, `TbSkpPaska`, `Vw07Sertifikasi`, dan `TbSpdiPasca` dari
+ * `../models/index.js`.
  *
  * ATURAN DUAL-DATABASE: setiap query hanya menyentuh SATU schema. Tidak ada
  * JOIN lintas-database (mis. `report_primer` dengan `report_kapal`) — data
- * digabung in-memory di service. Karena itu keempat method di bawah menerima
+ * digabung in-memory di service. Karena itu kelima method di bawah menerima
  * rentang tanggal yang sama dan dipanggil paralel, bukan digabung di SQL.
  *
  * Kolom tanggal bersumber dari kolom `DATE` (`tgl_izin`, `tgl_terbit`,
@@ -176,6 +178,41 @@ class MapRepository {
       gradeB: Number(row.gradeB) || 0,
       gradeC: Number(row.gradeC) || 0,
       jumlahUpi: Number(row.jumlahUpi) || 0,
+    }));
+  }
+
+  /**
+   * Agregasi jumlah sertifikat SPDI terbit per provinsi.
+   *
+   * Hanya sertifikat yang sudah terbit (`tgl_terbit IS NOT NULL`) yang
+   * dihitung, dan tahun diambil dari `tgl_terbit` — bukan `tgl_permohonan` —
+   * agar konsisten dengan KPI "sertifikat terbit" pada dashboard.
+   *
+   * `kd_provinsi` pada `tb_spdi_pasca` sudah berupa kode BPS (2 digit). Kolom
+   * `provinsi` ikut dibawa sebagai cadangan bila suatu saat kode kosong,
+   * supaya service masih bisa memetakan lewat nama.
+   *
+   * @param {string} startDate
+   * @param {string} endDate
+   * @returns {Promise<Array<{kd_provinsi: string, provinsi: string, total: number}>>}
+   */
+  static async getSpdiByProvince(startDate, endDate) {
+    const rows = await TbSpdiPasca.findAll({
+      attributes: [
+        [literal('kd_provinsi'), 'kd_provinsi'],
+        [literal('provinsi'), 'provinsi'],
+        [literal('COUNT(*)'), 'total'],
+      ],
+      where: literal('tgl_terbit IS NOT NULL AND tgl_terbit BETWEEN :startDate AND :endDate'),
+      group: [literal('kd_provinsi'), literal('provinsi')],
+      replacements: { startDate, endDate },
+      raw: true,
+    });
+
+    return rows.map((row) => ({
+      kd_provinsi: row.kd_provinsi,
+      provinsi: row.provinsi,
+      total: Number(row.total) || 0,
     }));
   }
 }

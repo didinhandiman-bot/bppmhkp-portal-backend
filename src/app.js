@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import v1Routes from './routes/index.js';
 import haccpRoutes from './routes/haccpRoutes.js';
+import spdiPascaRoutes from './routes/spdiPasca.routes.js';
 import errorHandler from './middleware/errorHandler.js';
 
 const app = express();
@@ -30,6 +31,9 @@ app.use('/api/v1', v1Routes);
 // Alias kompatibilitas frontend lama; router yang sama tetap memverifikasi JWT.
 // Prefix utama: /api/v1/pasca-panen/haccp melalui routes/index.js.
 app.use('/api/pasca-panen/haccp', haccpRoutes);
+// Alias yang sama untuk modul SPDI Pascapanen (prefix utama:
+// /api/v1/pascapanen/spdi melalui routes/index.js).
+app.use('/api/pascapanen/spdi', spdiPascaRoutes);
 
 // Global Error Handler diletakkan paling akhir
 app.use(errorHandler);

@@ -297,7 +297,10 @@ class ExportRepository {
         'bulan',
         [literal('SUM(netto)'), 'totalNettoKg'],
         [literal('SUM(nilai_rupiah)'), 'totalNilaiRupiah'],
-        [literal('COUNT(DISTINCT no_hc)'), 'totalDokumenHc'],
+        // jika ingin menghitung total dokumen HC, gunakan COUNT(DISTINCT no_hc) di sini
+        // [literal('COUNT(DISTINCT no_hc)'), 'totalDokumenHc'],
+        // atau jika ingin menghitung total dokumen Aju, gunakan COUNT(DISTINCT nomor_aju) di sini
+        [literal('COUNT(DISTINCT nomor_aju)'), 'totalDokumenHc'],
       ],
       ...whereOptions(conditions, replacements),
       group: ['bulan'],
